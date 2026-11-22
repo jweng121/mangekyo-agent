@@ -86,6 +86,18 @@ The offline benchmark compares an actual corrected cold run with the recorded re
 
 To make two real OpenAI Responses requests using the first snapshot's unchanged context, explicitly run `mangekyo benchmark RUN_ID --openai-model MODEL` with `OPENAI_API_KEY` set. The command reports provider-returned cached and written token counts and elapsed time for both calls. The short reference context may be below the provider's cache threshold, so a cache hit is not guaranteed. Prices are not assumed; pass all four `--input-price`, `--cached-price`, `--cache-write-price`, and `--output-price` rates (USD per million tokens) for an estimated request cost.
 
+## Record a launched agent automatically
+
+Run an agent through Mangekyo to create a named run without changing the agent's code:
+
+```powershell
+mangekyo run -- python agent.py
+mangekyo run --label "Review invoice 42" -- python agent.py
+mangekyo log
+```
+
+Mangekyo prints the run ID, records the command, working directory, process ID, and exit status, and shows the agent name and start time in the dashboard. It passes `MANGEKYO_RUN_ID` and `MANGEKYO_HOME` to the child process. This process-level recording does not capture internal model calls, tool calls, or snapshots; those require an agent adapter or the Python recording API below. Mangekyo does not detect processes started outside `mangekyo run`.
+
 ## Recording your agent
 
 ```python

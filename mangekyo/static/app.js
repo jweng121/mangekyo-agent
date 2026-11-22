@@ -8,7 +8,7 @@
       try {
         const data = await api('/api/runs');
         el('store-path').textContent='Store: '+data.store;
-        el('runs').innerHTML = data.runs.length ? data.runs.map(r => `<div class="item ${r.id===selectedRun?'active':''}" data-run="${esc(r.id)}"><strong>${esc(r.label)}</strong><span class="pill ${r.status==='failed'?'fail':'ok'}">${esc(r.status)}</span><span class="muted">${esc(r.id)}</span></div>`).join('') : '<div class="empty">No runs yet. Run <code>mangekyo demo</code> in a terminal.</div>';
+        el('runs').innerHTML = data.runs.length ? data.runs.map(r => `<div class="item ${r.id===selectedRun?'active':''}" data-run="${esc(r.id)}"><strong>${esc(r.label)}</strong><span class="pill ${r.status==='failed'?'fail':'ok'}">${esc(r.status)}</span><span class="muted">${esc(r.agent)} · ${esc(new Date(r.created*1000).toLocaleString())} · ${esc(r.id)}</span></div>`).join('') : '<div class="empty">No runs yet. Run <code>mangekyo demo</code> in a terminal.</div>';
         el('branches').innerHTML = data.branches.length ? data.branches.map(b => `<div class="item" data-branch="${esc(b.name)}"><strong>${esc(b.name)}</strong><span class="muted">${esc(b.result_run || 'Not resumed')}</span></div>`).join('') : '<div class="empty">No branches yet.</div>';
         document.querySelectorAll('[data-run]').forEach(n => n.onclick=()=>showRun(n.dataset.run));
         document.querySelectorAll('[data-branch]').forEach(n => n.onclick=()=>showBranch(n.dataset.branch, data.branches));
@@ -20,7 +20,7 @@
         selectedRun=id; selectedSnapshot=null;
         const data=await api('/api/run/'+encodeURIComponent(id));
         currentArtifacts=data.artifacts;
-        el('summary').innerHTML=`<strong>${esc(data.run.label)}</strong><br><span class="muted">${esc(data.run.id)} · ${esc(data.run.status)} · adapter ${esc(data.run.adapter)}</span>`;
+        el('summary').innerHTML=`<strong>${esc(data.run.label)}</strong><br><span class="muted">${esc(data.run.agent)} · ${esc(new Date(data.run.created*1000).toLocaleString())} · ${esc(data.run.id)} · ${esc(data.run.status)} · adapter ${esc(data.run.adapter)}</span>`;
         el('events').innerHTML=data.events.map(e=>`<div class="item ${e.kind==='error'?'fail':''}" data-event="${esc(e.id)}"><span class="pill">${e.seq}</span><strong>${esc(e.kind)}</strong><span class="muted">${esc(JSON.stringify(e.payload).slice(0,110))}</span></div>`).join('');
         document.querySelectorAll('[data-event]').forEach(n=>n.onclick=()=>showEvent(data.events.find(e=>e.id===n.dataset.event)));
         el('artifacts').innerHTML=data.artifacts.length ? data.artifacts.map(a=>`<div class="item" data-artifact="${esc(a.id)}"><strong>${esc(a.name)}</strong><span class="muted">${esc(a.mime)} · ${esc(a.id)}</span></div>`).join('') : '<div class="empty">No captured documents or screenshots for this run.</div>';

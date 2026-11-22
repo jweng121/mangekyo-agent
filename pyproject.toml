@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mangekyo-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local execution history and recovery for Python agents"
 readme = "README.md"
 requires-python = ">=3.11"

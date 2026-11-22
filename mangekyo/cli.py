@@ -30,6 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--project", type=Path)
     init.add_argument("--browser", action="store_true")
     sub.add_parser("demo", help="Record a contained failing reference run")
+    run = sub.add_parser("run", help="Launch a command and automatically identify its run")
+    run.add_argument("--label", help="Human-readable task label")
+    run.add_argument("argv", nargs=argparse.REMAINDER, help="Command to launch after --")
     sub.add_parser("log", help="List runs and branches")
     show = sub.add_parser("show", help="Show a run, event, snapshot, or branch")
     show.add_argument("id")
@@ -128,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
                 print_json(result)
                 print("Next: mangekyo show " + result["run_id"])
                 print("Or:   mangekyo --tui / mangekyo dashboard")
+            elif args.command == "run":
+                from .launch import launch
+                return launch(store, args.argv, args.label)
             elif args.command == "log":
                 print_json({"runs": store.runs(), "branches": store.branches()})
             elif args.command == "show":
