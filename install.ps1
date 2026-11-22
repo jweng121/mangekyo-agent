@@ -38,9 +38,14 @@ try {
 
     New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
     $staged = Join-Path $destinationDir ('mangekyo-' + [guid]::NewGuid().ToString('N') + '.exe')
+    $backup = Join-Path $destinationDir ('mangekyo-backup-' + [guid]::NewGuid().ToString('N') + '.exe')
     Copy-Item -LiteralPath $downloadFile -Destination $staged
     try {
-        Move-Item -LiteralPath $staged -Destination $destination -Force
+        if (Test-Path -LiteralPath $destination) {
+            [System.IO.File]::Replace($staged, $destination, $backup)
+        } else {
+            [System.IO.File]::Move($staged, $destination)
+        }
     } catch {
         Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
         throw "Could not replace $destination. Close Mangekyo and retry. $($_.Exception.Message)"
@@ -49,6 +54,7 @@ try {
         $expected, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Installed Mangekyo failed its SHA256 check: $destination"
     }
+    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
 
     if (-not $SkipPath) {
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
