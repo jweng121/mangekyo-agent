@@ -25,7 +25,7 @@ The first working draft includes a standalone Windows command, terminal UI, loca
 For a published Windows release, install in PowerShell with one line, then run Mangekyo directly:
 
 ```powershell
-irm https://raw.githubusercontent.com/jweng121/mangekyo-agent/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/jweng121/mangekyo-agent/refs/heads/main/install.ps1 | iex
 mangekyo setup
 mangekyo demo
 ```
