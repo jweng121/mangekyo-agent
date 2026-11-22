@@ -1,6 +1,6 @@
 # Documentation
 
-Mangekyo Agent is an open-source agent runtime for version control. The runtime implementation and install instructions have not been published yet.
+Mangekyo Agent is an open-source runtime for AI agents that work with Git. The runtime implementation and install instructions have not been published yet.
 
 ## Project links
 

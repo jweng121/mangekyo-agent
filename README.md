@@ -2,7 +2,7 @@
   <img src="assets/github/mangekyo-agent-wordmark.png" alt="MANGEKYO-AGENT" width="100%">
 </p>
 
-# Mangekyo Agent
+<h1 align="center">Mangekyo Agent</h1>
 
 <p align="center">
   <a href="https://github.com/jweng121/mangekyo-agent">GitHub</a> ·
@@ -16,7 +16,7 @@
   <a href="https://github.com/jweng121"><img alt="Built by James Weng" src="https://img.shields.io/badge/BUILT%20BY-JAMES%20WENG-FF343B?style=for-the-badge&labelColor=444444"></a>
 </p>
 
-**An open-source agent runtime for version control.** Mangekyo Agent is being developed as a home for agent workflows that work with versioned projects.
+**An open-source runtime for AI agents that work with Git.** Mangekyo Agent is being developed for agent workflows in Git repositories.
 
 The project is at an early stage. Runtime code and installation instructions have not been published yet; this repository currently holds the project identity and documentation as they take shape.
 
