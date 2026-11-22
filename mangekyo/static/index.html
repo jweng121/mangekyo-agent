@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Mangekyo Agent · Run history</title>
+  <style>
+    :root { color-scheme:light; font:13px/1.55 Inter,"Segoe UI",Arial,sans-serif; background:#faf9fa; color:#423d40 }
+    * { box-sizing:border-box } body { margin:0 } button,input { font:inherit }
+    button { background:#fff; color:#6d5864; border:1px solid #e9e1e5; border-radius:8px; padding:8px 12px; cursor:pointer; font-weight:500 }
+    button:hover { background:#fcf5f8; border-color:#d7afc0 } button:disabled { opacity:.45; cursor:not-allowed }
+    button:focus-visible,input:focus-visible,a:focus-visible { outline:2px solid #b44370; outline-offset:2px }
+    input { background:#fff; color:#423d40; border:1px solid #e4dce1; border-radius:8px; padding:8px 10px; min-width:0 }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; border-bottom:1px solid #ece6e9; padding:8px 20px; background:#fff }
+    .brand { display:flex; align-items:center; gap:12px; min-width:0 } .brand img { width:42px; height:42px; flex:none; object-fit:contain }
+    .brand span { color:#51464c; white-space:nowrap; display:block; font-weight:500 } .brand small { display:block; color:#a18f99; font-size:10px; max-width:42vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    main { display:grid; grid-template-columns:220px minmax(390px,1fr) minmax(340px,1fr); height:calc(100vh - 65px) }
+    section { overflow:auto; border-right:1px solid #ece6e9; min-width:0; background:#fff } section:first-child { background:#fcfafb } section:last-child { border-right:0 }
+    h2 { font-size:12px; letter-spacing:.01em; font-weight:600; color:#65545e; padding:18px 17px 10px; margin:0; position:sticky; top:0; background:inherit; z-index:1 }
+    .item { padding:12px 16px; border-bottom:1px solid #f0eaed; cursor:pointer } .item:hover { background:#fcf6f9 } .item.active { background:#faedf3; box-shadow:inset 3px 0 #b44370 }
+    .item strong { display:block; overflow-wrap:anywhere; font-weight:550 } .muted { color:#968791; font-size:11px } .pill { display:inline-block; font-size:10px; color:#9b6580; border:1px solid #ead8e1; background:#fdf6f9; border-radius:6px; padding:1px 7px; margin-right:6px }
+    .fail { color:#b35752 } .ok { color:#6e927a } .panel { padding:0 17px 18px }
+    pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#faf8f9; border:1px solid #eee6ea; border-radius:8px; padding:12px; font-size:12px; line-height:1.55; color:#51474d }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; padding:12px 17px; border-bottom:1px solid #eee7eb }
+    .empty { color:#a0919a; padding:20px } .form { display:grid; gap:8px; border-top:1px solid #eee7eb; margin-top:16px; padding-top:14px }
+    .form label { font-size:11px; color:#8e7a86 } .form button { justify-self:start; background:#b44370; border-color:#b44370; color:#fff }
+    #notice { min-height:20px; color:#ae4f75; padding:8px 17px }
+    .evidence-view { position:relative; width:fit-content; max-width:100%; margin-top:12px; cursor:crosshair }
+    .evidence-view img { display:block; max-width:100%; height:auto; border:1px solid #e4dce1 }
+    .evidence-view canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none }
+    .evidence-tools { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:12px }
+    .evidence-tools input { flex:1; min-width:180px }
+    .annotation { border-left:3px solid #b44370; padding:7px 10px; margin:8px 0; background:#fcf5f8 }
+    a { color:#a94670; text-underline-offset:2px }
+    .timeline-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:14px 17px 8px; font-weight:600; color:#65545e }
+    .timeline-heading button { padding:3px 8px; font-size:11px }
+    .graph-scroll { overflow-x:auto; border-bottom:1px solid #eee7eb }
+    .graph { position:relative; height:158px; width:max-content; min-width:100%; background:#fff }
+    .graph svg { position:absolute; inset:0; pointer-events:none; overflow:visible }
+    .graph path { fill:none; stroke:#d6d7d5; stroke-width:2 }
+    .graph path.abandoned { stroke:#d5cbd0; stroke-dasharray:4 5 }
+    .graph path.fork { stroke:#6f9a7c; stroke-width:2.5 }
+    .graph.playing path.fork { stroke-dasharray:7 5; animation:edge-flow .65s linear infinite }
+    .graph.success path.fork { animation:edge-glow 1.1s ease-in-out }
+    .graph-node { position:absolute; width:110px; padding:3px 4px; border:0; background:transparent; text-align:center; color:#766e72; font-size:10px; line-height:1.25 }
+    .graph-node .dot { display:block; width:17px; height:17px; margin:0 auto 6px; border:2px solid #aab1ab; border-radius:50%; background:#fff; box-shadow:0 0 0 3px #fff }
+    .graph-node.active .dot { border-color:#b44370; background:#b44370; box-shadow:0 0 0 3px #fff,0 0 0 5px #efd1df }
+    .graph-node.failed .dot { border-color:#bd6b60; background:#bd6b60 }
+    .graph-node.corrected .dot { border-color:#5d9873; background:#dcece1 }
+    .graph-node.corrected.completed .dot { background:#5d9873 }
+    .graph-node.pending .dot { border-style:dashed }
+    .graph-node span:last-child { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+    .graph-legend { display:flex; gap:12px; padding:6px 17px 9px; color:#968791; font-size:10px }
+    .graph-legend span::before { content:'●'; margin-right:4px } .graph-legend .original::before { color:#aab1ab } .graph-legend .failed::before { color:#bd6b60 } .graph-legend .corrected::before { color:#5d9873 }
+    .list-mode .graph-scroll,.list-mode .graph-legend { display:none }
+    .track-mode #events { display:none }
+    @keyframes edge-flow { to { stroke-dashoffset:-12 } } @keyframes edge-glow { 50% { stroke:#32aa61; filter:drop-shadow(0 0 5px #65b985) } }
+    @media(prefers-reduced-motion:reduce) { .graph.playing path.fork,.graph.success path.fork { animation:none } }
+    @media(max-width:900px) { main { display:block; height:auto } section { max-height:65vh; border-right:0; border-bottom:1px solid #ece6e9 } .brand small { max-width:45vw } }
+  </style>
+</head>
+<body>
+  <header><div class="brand"><img src="/logo.png" alt="Mangekyo logo"><div><span>Mangekyo Agent</span><small id="store-path">Loading store…</small></div></div><button id="refresh">Refresh</button></header>
+  <main>
+    <section><h2>Runs and branches</h2><div id="runs"></div><h2>Branches</h2><div id="branches"></div></section>
+    <section id="timeline" class="track-mode"><div class="timeline-heading">Execution timeline <button id="view-toggle" type="button">List view</button></div><div id="summary" class="panel muted">Select a run.</div><div class="graph-scroll"><div id="graph" class="graph"></div></div><div class="graph-legend"><span class="original">Original</span><span class="failed">Failed path</span><span class="corrected">Corrected branch</span></div><div id="events"></div><h2>Evidence</h2><div id="artifacts"></div></section>
+    <section><h2>Inspector</h2><div id="inspector" class="panel empty">Select an event or checkpoint to inspect its captured context.</div><div id="notice"></div></section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

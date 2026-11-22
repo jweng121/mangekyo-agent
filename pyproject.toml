@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mangekyo-agent"
+version = "0.1.0"
+description = "Local execution history and recovery for Python agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+tui = ["prompt-toolkit>=3.0,<4"]
+evidence = ["pypdfium2>=4,<6", "playwright>=1.50,<2"]
+
+[project.scripts]
+mangekyo = "mangekyo.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mangekyo*"]
+
+[tool.setuptools.package-data]
+mangekyo = ["static/*"]
