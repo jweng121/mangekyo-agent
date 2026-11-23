@@ -4,7 +4,7 @@ These tests were written before the integration. The ordinary tests use a
 deterministic fake model and make no provider requests. They should fail if an
 endpoint or branch invariant regresses.
 
-## Endpoints to implement
+## Endpoint contract
 
 The dashboard remains bound to `127.0.0.1`. A server operator explicitly
 registers allowed graphs with `MANGEKYO_LANGGRAPH_GRAPHS`, a JSON object mapping
