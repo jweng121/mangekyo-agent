@@ -13,6 +13,7 @@ dependencies = []
 [project.optional-dependencies]
 tui = ["prompt-toolkit>=3.0,<4"]
 evidence = ["pypdfium2>=4,<6", "playwright>=1.50,<2"]
+langgraph = ["langgraph>=1.2,<2", "langgraph-checkpoint-sqlite>=3.1,<4"]
 
 [project.scripts]
 mangekyo = "mangekyo.cli:main"

@@ -1,0 +1,112 @@
+"""Exercise real-provider response parsing against a local test transport."""
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+from mangekyo.examples.invoice import model_call
+from conftest import execute_invoice_run
+
+
+def test_provider_usage_is_taken_from_response(monkeypatch):
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            assert self.path == "/v1/responses"
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert request["model"] == "test-model"
+            body = json.dumps({"usage": {"input_tokens": 1200, "output_tokens": 32,
+                "input_tokens_details": {"cached_tokens": 256, "cache_write_tokens": 0}},
+                "output": [{"content": [{"type": "output_text", "text": "WRONG-ACCOUNT"}]}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    monkeypatch.setenv("MANGEKYO_LANGGRAPH_MODEL", "test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setenv("MANGEKYO_LANGGRAPH_BASE_URL", f"http://127.0.0.1:{server.server_port}/v1/responses")
+    try:
+        usage, output = model_call("read_invoice", "Synthetic invoice")
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+    assert usage == {"provider": "openai", "model": "test-model", "node": "read_invoice",
+                     "input_tokens": 1200, "output_tokens": 32,
+                     "cached_input_tokens": 256, "cache_write_tokens": 0}
+    assert output == "WRONG-ACCOUNT"
+
+
+@pytest.fixture
+def provider_transport(monkeypatch):
+    calls = {"read": 0}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            read = "Extract the account identifier" in request["input"]
+            if read:
+                calls["read"] += 1
+            cached = 256 if read and calls["read"] == 2 else 0
+            answer = "WRONG-ACCOUNT" if read else "PROPOSAL"
+            body = json.dumps({"usage": {
+                "input_tokens": 1200 if read else 300,
+                "output_tokens": 32 if read else 20,
+                "input_tokens_details": {"cached_tokens": cached, "cache_write_tokens": 0},
+            }, "output": [{"content": [{"type": "output_text", "text": answer}]}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    monkeypatch.setenv("MANGEKYO_LANGGRAPH_MODEL", "test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setenv("MANGEKYO_LANGGRAPH_BASE_URL", f"http://127.0.0.1:{server.server_port}/v1/responses")
+    try:
+        yield calls
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
+def test_branch_benchmark_uses_reported_cache_tokens(provider_transport, langgraph_api):
+    client, _ = langgraph_api
+    parent_id, _ = execute_invoice_run(client)
+    client.post(f"/api/v1/runs/{parent_id}/flags", {
+        "reason": "Wrong account", "expected": {"supplier_account": "SAFE-ACCOUNT"},
+    })
+    detail = client.get(f"/api/v1/runs/{parent_id}")[1]
+    checkpoint = next(s for s in detail["snapshots"] if s["name"] == "after-read")
+    branch = client.post(f"/api/v1/runs/{parent_id}/branches", {
+        "snapshot_id": checkpoint["id"], "name": "provider-cache-test",
+        "correction": {"supplier_account": "SAFE-ACCOUNT"},
+    })[1]
+    assert client.post(f"/api/v1/branches/{branch['branch_id']}/resume", {})[0] == 200
+    status, report = client.post(f"/api/v1/branches/{branch['branch_id']}/benchmark", {
+        "price_per_million_usd": {"input": 1.0, "cached_input": .1,
+                                  "cache_write": 1.25, "output": 2.0},
+    })
+    assert status == 200, report
+    assert provider_transport["read"] == 2  # Parent and cold; branch skipped the read.
+    assert report["cold"]["provider_usage"]["cached_input_tokens"] == 256
+    assert report["branch"]["provider_usage"]["cached_input_tokens"] == 0
+    assert report["provider_cache_saving_usd"] == pytest.approx(-.0002304)
+    assert report["net_model_saving_usd"] == pytest.approx(.0010336)
+    assert report["saving_demonstrated"] is True

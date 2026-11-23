@@ -10,12 +10,14 @@ from urllib.parse import unquote, urlparse
 
 from .demo import benchmark, resume, resume_unavailable_reason
 from .evidence import pdf_page_count, render_pdf_page
+from .langgraph_api import ApiError, LangGraphApi
 from .store import Store
 
 STATIC = Path(__file__).parent / "static"
 
 
 def serve(store_path: Path, *, port: int = 8765, open_browser: bool = True) -> None:
+    langgraph_api = LangGraphApi(store_path)
     class Handler(BaseHTTPRequestHandler):
         def _local_host(self) -> bool:
             if self.headers.get("Host") not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
@@ -41,7 +43,10 @@ def serve(store_path: Path, *, port: int = 8765, open_browser: bool = True) -> N
                 return
             path = urlparse(self.path).path
             try:
-                if path in {"/", "/index.html"}:
+                if path.startswith("/api/v1/"):
+                    status, data = langgraph_api.get(path)
+                    self._json(status, data)
+                elif path in {"/", "/index.html"}:
                     self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
                 elif path == "/logo.png":
                     self._send(200, (STATIC / "logo.png").read_bytes(), "image/png")
@@ -108,6 +113,8 @@ def serve(store_path: Path, *, port: int = 8765, open_browser: bool = True) -> N
                                                      if after is not None and before.get(k) != after.get(k)]})
                 else:
                     self._json(404, {"error": "Not found"})
+            except ApiError as exc:
+                self._json(exc.status, {"error": str(exc)})
             except (KeyError, ValueError, OSError) as exc:
                 self._json(400, {"error": str(exc)})
 
@@ -124,6 +131,10 @@ def serve(store_path: Path, *, port: int = 8765, open_browser: bool = True) -> N
                 return
             try:
                 body = json.loads(self.rfile.read(size))
+                if self.path.startswith("/api/v1/"):
+                    status, data = langgraph_api.post(urlparse(self.path).path, body)
+                    self._json(status, data)
+                    return
                 with Store(store_path) as store:
                     if self.path == "/api/branch":
                         name = body["name"].strip()
@@ -141,8 +152,12 @@ def serve(store_path: Path, *, port: int = 8765, open_browser: bool = True) -> N
                         self._json(201, {"id": ident})
                     else:
                         self._json(404, {"error": "Not found"})
+            except ApiError as exc:
+                self._json(exc.status, {"error": str(exc)})
             except (KeyError, ValueError, OSError, TypeError) as exc:
                 self._json(400, {"error": str(exc)})
+            except RuntimeError as exc:
+                self._json(409, {"error": str(exc)})
 
         def log_message(self, _format: str, *args: object) -> None:
             pass
