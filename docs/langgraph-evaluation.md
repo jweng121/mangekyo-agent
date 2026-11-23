@@ -84,6 +84,8 @@ Then run each contract separately or the full suite:
 
 Each file command targets one contract independently. The last command
 includes existing unit tests and excludes the opt-in live provider test.
+GitHub Actions runs that deterministic full suite on Windows and Linux for
+pushes and pull requests; it does not spend provider tokens.
 
 ## Opt-in provider-backed check
 
