@@ -75,6 +75,30 @@ def test_cheaper_but_wrong_branch_is_not_called_a_saving(langgraph_api):
     assert report["verdict"] == "no saving demonstrated"
 
 
+def test_correct_branch_with_zero_net_cost_saving_reports_no_saving(langgraph_api):
+    client, _ = langgraph_api
+    parent_id, _ = execute_invoice_run(client)
+    client.post(f"/api/v1/runs/{parent_id}/flags", {
+        "reason": "Wrong account", "expected": {"supplier_account": "SAFE-ACCOUNT"},
+    })
+    detail = client.get(f"/api/v1/runs/{parent_id}")[1]
+    checkpoint = next(s for s in detail["snapshots"] if s["name"] == "after-read")
+    branch = client.post(f"/api/v1/runs/{parent_id}/branches", {
+        "snapshot_id": checkpoint["id"], "name": "zero-price",
+        "correction": {"supplier_account": "SAFE-ACCOUNT"},
+    })[1]
+    assert client.post(f"/api/v1/branches/{branch['branch_id']}/resume", {})[0] == 200
+    status, report = client.post(f"/api/v1/branches/{branch['branch_id']}/benchmark", {
+        "price_per_million_usd": {"input": 0, "cached_input": 0,
+                                  "cache_write": 0, "output": 0},
+    })
+    assert status == 200, report
+    assert report["correct_outcome"] is True
+    assert report["net_model_saving_usd"] == 0
+    assert report["saving_demonstrated"] is False
+    assert report["verdict"] == "no saving demonstrated"
+
+
 def test_benchmark_refuses_a_cost_claim_without_a_resumed_branch(langgraph_api):
     client, _ = langgraph_api
     parent_id, _ = execute_invoice_run(client)
