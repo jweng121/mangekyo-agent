@@ -111,13 +111,15 @@ $env:MANGEKYO_TEST_PRICE_INPUT_USD_PER_M = '0.10'
 $env:MANGEKYO_TEST_PRICE_CACHED_INPUT_USD_PER_M = '0.01'
 $env:MANGEKYO_TEST_PRICE_CACHE_WRITE_USD_PER_M = '0.125'
 $env:MANGEKYO_TEST_PRICE_OUTPUT_USD_PER_M = '0.50'
-.\.venv\Scripts\python.exe -m pytest tests/live_langgraph.py -q
+.\.venv\Scripts\python.exe -m pytest tests/live_langgraph.py -q -s
 ```
 
 This test uses a real provider call and is excluded from the normal suite so CI
 does not require an API key. It must fail if the branch does not demonstrate a
 net saving at the supplied rates; a provider prompt-cache hit is measured
-separately and is never assumed.
+separately and is never assumed. The command prints the complete benchmark,
+including provider-reported token usage, configured-rate model costs, skipped
+steps, elapsed time, and the saving verdict.
 
 For OpenAI instead, set `OPENAI_API_KEY`, change the model to `gpt-6-luna`, and
 use its current [published rates](https://developers.openai.com/api/docs/models/gpt-6-luna).

@@ -1,5 +1,6 @@
 """Opt-in provider-backed cost check; run this file explicitly with pytest."""
 
+import json
 import os
 
 import pytest
@@ -42,6 +43,7 @@ def test_real_provider_branch_cost_and_correctness(langgraph_api):
         "price_per_million_usd": rates,
     })
     assert status == 200, report
+    print("\nLive LangGraph branch benchmark:\n" + json.dumps(report, indent=2, sort_keys=True))
     assert report["cold"]["output"] == report["branch"]["output"]
     assert report["cold"]["provider_usage"]["provider"] == provider
     assert report["branch"]["provider_usage"]["provider"] == provider
