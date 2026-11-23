@@ -29,6 +29,8 @@ def test_flag_fork_and_resume_preserves_parent_run(langgraph_api):
     assert child["run_id"] != parent_id
     assert child["parent_run"] == parent_id
     assert child["source_snapshot"] == checkpoint["id"]
+    locator = client.get(f"/api/v1/snapshots/{checkpoint['id']}")[1]["graph_checkpoint"]
+    assert child["graph_checkpoint"] == locator
     assert child["output"]["supplier_account"] == "SAFE-ACCOUNT"
     assert "read_invoice" in child["skipped_steps"]
 

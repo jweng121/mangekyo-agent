@@ -371,6 +371,7 @@ class LangGraphApi:
         result = self._execute(store, child_id, registration, registration["input"],
                                source_run=parent_id, fork=context, correction=correction)
         return {**result, "parent_run": parent_id, "source_snapshot": snap["id"],
+                "graph_checkpoint": context["graph_checkpoint"],
                 "skipped_steps": context["completed_steps"]}
 
     def _benchmark(self, store: Store, branch_id: str, body: dict) -> dict:
@@ -392,6 +393,7 @@ class LangGraphApi:
             rates[key] = float(value)
         snap = store.one("snapshots", branch["source_snapshot"])
         parent_id = snap["run_id"]
+        context = store.context(snap["id"])
         registration = _registration(store, parent_id)
         factory = self._factory(registration["graph"])
         if not getattr(factory, "benchmark_safe", False):
@@ -436,6 +438,7 @@ class LangGraphApi:
         ))
         demonstrated = bool(same_output and correct and saving > 0 and duplicates == 0)
         report = {"branch_id": branch_id, "source_run": parent_id, "source_snapshot": snap["id"],
+                  "graph_checkpoint": context["graph_checkpoint"],
                   "configured_price_per_million_usd": rates,
                   "source": {"run_id": parent_id, "provider_usage": source_usage,
                              "model_cost_usd": source_cost},

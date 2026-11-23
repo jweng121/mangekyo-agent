@@ -115,25 +115,27 @@ This test uses a real provider call and is excluded from the normal suite so CI
 does not require an API key. It must fail if the branch does not demonstrate a
 net saving at the supplied rates; a provider prompt-cache hit is measured
 separately and is never assumed. The command prints the complete benchmark,
-including provider-reported token usage, configured-rate model costs, skipped
-steps, elapsed time, and the saving verdict.
+including the parent run and graph checkpoint IDs, provider-reported token
+usage, configured-rate model costs, skipped steps, elapsed time, and the saving
+verdict.
 
 ### Measured Claude run (2026-11-23)
 
 The opt-in test passed against Claude Haiku 5.5 with thinking disabled for this
 short extraction task, using provider-reported usage and the published rates
-above. Parent run `dade082643dd` branched from checkpoint snapshot
-`7ac70d5387ef`; the branch skipped `read_invoice`.
+above. Parent run `b2833fe3d0f4` branched from snapshot `a5fd69a85848`,
+whose LangGraph checkpoint ID was `1f1e6fe1-25e8-6ffd-8001-78aa27a444e7`;
+the branch skipped `read_invoice`.
 Both corrected runs produced `SAFE-ACCOUNT`, and neither reported a duplicate
 side effect.
 
 | Corrected path | Input tokens | Output tokens | Model cost | Elapsed |
 | --- | ---: | ---: | ---: | ---: |
-| Branch (`8d228b2ce1b5`) | 53 | 81 | $0.0000458 | 0.756 s |
-| Full rerun (`485f844dd8f5`) | 3,955 | 92 | $0.0004415 | 1.399 s |
+| Branch (`cb8f5b3af563`) | 53 | 86 | $0.0000483 | 0.788 s |
+| Full rerun (`8b6d80808d85`) | 3,955 | 105 | $0.0004480 | 1.257 s |
 
-The **net model saving was $0.0003957** for this one correction, and the branch
-finished 0.644 s sooner. The cold run's skipped read step cost $0.0003972;
+The **net model saving was $0.0003997** for this one correction, and the branch
+finished 0.470 s sooner. The cold run's skipped read step cost $0.0003972;
 the small difference came from variable output token counts.
 Provider prompt-cache saving was **$0**, with zero cache-read and cache-write
 tokens reported. These costs are calculated from provider token usage at the

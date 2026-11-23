@@ -27,6 +27,10 @@ def test_branch_benchmark_proves_net_model_saving(langgraph_api):
         "price_per_million_usd": prices,
     })
     assert status == 200, report
+    locator = client.get(f"/api/v1/snapshots/{checkpoint['id']}")[1]["graph_checkpoint"]
+    assert report["source_run"] == parent_id
+    assert report["source_snapshot"] == checkpoint["id"]
+    assert report["graph_checkpoint"] == locator
     assert report["cold"]["output"] == report["branch"]["output"]
     assert report["cold"]["provider_usage"]["input_tokens"] > report["branch"]["provider_usage"]["input_tokens"]
     assert report["cold"]["model_cost_usd"] > report["branch"]["model_cost_usd"]

@@ -74,6 +74,10 @@ def test_real_provider_branch_cost_and_correctness(configured_api):
     })
     assert status == 200, report
     print("\nLive LangGraph branch benchmark:\n" + json.dumps(report, indent=2, sort_keys=True))
+    locator = client.get(f"/api/v1/snapshots/{checkpoint['id']}")[1]["graph_checkpoint"]
+    assert report["source_run"] == parent_id
+    assert report["source_snapshot"] == checkpoint["id"]
+    assert report["graph_checkpoint"] == locator
     assert report["cold"]["output"] == report["branch"]["output"]
     assert report["cold"]["provider_usage"]["provider"] == provider
     assert report["branch"]["provider_usage"]["provider"] == provider
