@@ -1,4 +1,5 @@
 .codex/
+.env.local
 .mangekyo/
 .mangekyo-test/
 __pycache__/

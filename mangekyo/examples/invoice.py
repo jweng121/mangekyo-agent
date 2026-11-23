@@ -45,6 +45,8 @@ def model_call(node: str, prompt: str) -> tuple[dict[str, Any], str]:
             raise RuntimeError("ANTHROPIC_API_KEY is required for the live Claude model")
         body = {"model": model, "max_tokens": 256,
                 "messages": [{"role": "user", "content": prompt}]}
+        if model == "claude-haiku-5-5":
+            body["thinking"] = {"type": "disabled"}
         request = urllib.request.Request(
             os.environ.get("MANGEKYO_ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1/messages"),
             data=json.dumps(body).encode(),

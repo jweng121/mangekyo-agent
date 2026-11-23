@@ -8,6 +8,22 @@ import pytest
 
 from mangekyo.examples.invoice import model_call
 from conftest import execute_invoice_run
+from live_langgraph import _load_local_config
+
+
+def test_live_config_loads_key_from_local_file_without_overriding_environment(tmp_path):
+    path = tmp_path / ".env.local"
+    path.write_text("ANTHROPIC_API_KEY=test-only-local\n"
+                    "MANGEKYO_LANGGRAPH_MODEL=claude-haiku-5-5\n"
+                    "UNRELATED_SETTING=ignored\n", encoding="utf-8")
+    environment = {}
+    _load_local_config(path, environment)
+    assert environment["ANTHROPIC_API_KEY"] == "test-only-local"
+    assert environment["MANGEKYO_LANGGRAPH_MODEL"] == "claude-haiku-5-5"
+    assert "UNRELATED_SETTING" not in environment
+    environment["ANTHROPIC_API_KEY"] = "existing-key"
+    _load_local_config(path, environment)
+    assert environment["ANTHROPIC_API_KEY"] == "existing-key"
 
 
 def test_provider_usage_is_taken_from_response(monkeypatch):
@@ -53,6 +69,7 @@ def test_anthropic_usage_normalizes_cache_read_and_write(monkeypatch):
             assert self.headers["anthropic-version"] == "2026-10-21"
             request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             assert request["model"] == "claude-haiku-5-5"
+            assert request["thinking"] == {"type": "disabled"}
             body = json.dumps({"usage": {"input_tokens": 900, "cache_read_input_tokens": 200,
                 "cache_creation_input_tokens": 100, "output_tokens": 32},
                 "content": [{"type": "text", "text": "WRONG-ACCOUNT"}]}).encode()
