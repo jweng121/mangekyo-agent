@@ -27,6 +27,30 @@ def test_unresolved_action_blocks_resume(langgraph_api):
         assert store.one("branches", branch["branch_id"])["result_run"] is None
 
 
+def test_completed_action_after_checkpoint_blocks_resume(langgraph_api):
+    client, home = langgraph_api
+    parent_id, _ = execute_invoice_run(client)
+    detail = client.get(f"/api/v1/runs/{parent_id}")[1]
+    checkpoint = next(s for s in detail["snapshots"] if s["name"] == "after-read")
+    status, event = client.post(f"/api/v1/langgraph/runs/{parent_id}/events", {
+        "kind": "tool", "node": "external_payment",
+        "payload": {"action_key": "payment-42", "action_state": "completed",
+                    "result": "simulated external effect"},
+    })
+    assert status == 201, event
+    branch = client.post(f"/api/v1/runs/{parent_id}/branches", {
+        "snapshot_id": checkpoint["id"], "name": "completed-after-checkpoint",
+        "correction": {"supplier_account": "SAFE-ACCOUNT"},
+    })[1]
+    with Store(home) as store:
+        before = len(store.runs())
+    status, error = client.post(f"/api/v1/branches/{branch['branch_id']}/resume", {})
+    assert status == 409, error
+    assert "completed action" in error["error"].lower()
+    with Store(home) as store:
+        assert len(store.runs()) == before
+
+
 def test_snapshot_from_another_run_cannot_be_branched(langgraph_api):
     client, _ = langgraph_api
     first_id, _ = execute_invoice_run(client)

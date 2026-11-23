@@ -39,6 +39,40 @@ def model_call(node: str, prompt: str) -> tuple[dict[str, Any], str]:
                  "output_tokens": 50 if node == "read_invoice" else 20},
                 "WRONG-ACCOUNT" if node == "read_invoice" else "PROPOSAL")
 
+    if model.startswith("claude-"):
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError("ANTHROPIC_API_KEY is required for the live Claude model")
+        body = {"model": model, "max_tokens": 256,
+                "messages": [{"role": "user", "content": prompt}]}
+        request = urllib.request.Request(
+            os.environ.get("MANGEKYO_ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1/messages"),
+            data=json.dumps(body).encode(),
+            headers={"x-api-key": key, "anthropic-version": "2026-10-21",
+                     "Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=120) as response:
+            data = json.load(response)
+        usage = data.get("usage") or {}
+        ordinary = usage.get("input_tokens")
+        read = usage.get("cache_read_input_tokens") or 0
+        written = usage.get("cache_creation_input_tokens") or 0
+        output = usage.get("output_tokens")
+        creation = usage.get("cache_creation") or {}
+        if creation.get("ephemeral_1h_input_tokens", 0):
+            raise RuntimeError("One-hour Anthropic cache writes need a separate price rate")
+        if not all(isinstance(value, int) and value >= 0
+                   for value in (ordinary, read, written, output)):
+            raise RuntimeError("Anthropic did not report complete, nonnegative token usage")
+        text = "\n".join(part.get("text", "") for part in data.get("content", [])
+                         if part.get("type") == "text").strip()
+        if not text:
+            raise RuntimeError("Anthropic returned no output text for the invoice task")
+        return ({"provider": "anthropic", "model": model, "node": node,
+                 "input_tokens": ordinary + read + written,
+                 "cached_input_tokens": read, "cache_write_tokens": written,
+                 "output_tokens": output}, text)
+
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("OPENAI_API_KEY is required for the live LangGraph model")

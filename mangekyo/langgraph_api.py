@@ -177,10 +177,16 @@ class LangGraphApi:
                     kind = _required_text(body, "kind")
                     if kind not in {"model", "tool", "error", "observation"}:
                         raise ApiError(400, "Unsupported event kind")
-                    payload = {"node": _required_text(body, "node"),
-                               "payload": _dict(body.get("payload"), "payload")}
+                    event_body = _dict(body.get("payload"), "payload")
+                    payload = {"node": _required_text(body, "node"), "payload": event_body}
                     if "usage" in body:
                         payload["usage"] = _dict(body["usage"], "usage")
+                    if kind == "tool" and ("action_key" in event_body or "action_state" in event_body):
+                        key = _required_text(event_body, "action_key")
+                        state = _required_text(event_body, "action_state")
+                        if state not in {"intent", "completed", "failed"}:
+                            raise ApiError(400, "Invalid action_state")
+                        store.action(run_id, key, state, event_body.get("result"))
                     return 201, {"event_id": store.event(run_id, kind, payload)}
                 if action == "checkpoints":
                     locator = _dict(body.get("graph_checkpoint"), "graph_checkpoint")
@@ -316,6 +322,12 @@ class LangGraphApi:
         ).fetchone()
         if unresolved:
             raise ApiError(409, f"Original run has unresolved action {unresolved[0]}")
+        completed_after = store.db.execute(
+            "SELECT action_key FROM actions WHERE run_id=? AND state='completed' AND created>?",
+            (parent_id, snap["created"]),
+        ).fetchone()
+        if completed_after:
+            raise ApiError(409, f"Original run completed action {completed_after[0]} after this checkpoint; reconcile before resuming")
         correction = store.get(branch["correction_hash"])
         from langgraph.checkpoint.sqlite import SqliteSaver
         with SqliteSaver.from_conn_string(str(self._checkpointer_path(parent_id))) as saver:
@@ -370,7 +382,14 @@ class LangGraphApi:
             raise ApiError(409, "Graph has not declared a contained cold benchmark safe")
         if getattr(factory, "graph_version", "unknown") != registration["graph_version"]:
             raise ApiError(409, "Graph version changed since the source run")
+        flag = _event(store, parent_id, "review_flag")
+        if not flag or not flag["payload"].get("expected"):
+            raise ApiError(409, "Flag the source run with an expected outcome before benchmarking")
         correction = store.get(branch["correction_hash"])
+        child_items = _usage_events(store, child_id)
+        source_items = _usage_events(store, parent_id)
+        child_usage, child_cost, child_discount = _cost_of_usage(child_items, rates)
+        source_usage, source_cost, _ = _cost_of_usage(source_items, rates)
         cold_id = store.create_run(registration["graph"], "Cold corrected baseline: " + branch_id,
                                    parent_run=parent_id, adapter=ADAPTER,
                                    adapter_version=ADAPTER_VERSION)
@@ -379,9 +398,9 @@ class LangGraphApi:
         cold_result = self._execute(store, cold_id, cold_registration,
                                     {**registration["input"], **correction})
         cold_items = _usage_events(store, cold_id)
-        child_items = _usage_events(store, child_id)
         cold_usage, cold_cost, cold_discount = _cost_of_usage(cold_items, rates)
-        child_usage, child_cost, child_discount = _cost_of_usage(child_items, rates)
+        if (cold_usage["provider"], cold_usage["model"]) != (child_usage["provider"], child_usage["model"]):
+            raise ApiError(409, "Cold and branch runs used different providers or models")
         child_output = _output(store, child_id)
         cold_output = _output(store, cold_id)
         skipped = (_event(store, child_id, "restore") or {"payload": {"skipped_steps": []}})["payload"]["skipped_steps"]
@@ -394,8 +413,7 @@ class LangGraphApi:
         duplicates = len(original_actions & branch_actions)
         saving = cold_cost - child_cost
         same_output = cold_result["output"] == child_output["output"]
-        flag = _event(store, parent_id, "review_flag")
-        expected = flag["payload"]["expected"] if flag else None
+        expected = flag["payload"]["expected"]
         correct = bool(expected and all(
             cold_result["output"].get(key) == value and child_output["output"].get(key) == value
             for key, value in expected.items()
@@ -403,6 +421,8 @@ class LangGraphApi:
         demonstrated = bool(same_output and correct and saving > 0 and duplicates == 0)
         report = {"branch_id": branch_id, "source_run": parent_id, "source_snapshot": snap["id"],
                   "configured_price_per_million_usd": rates,
+                  "source": {"run_id": parent_id, "provider_usage": source_usage,
+                             "model_cost_usd": source_cost},
                   "cold": {"run_id": cold_id, "output": cold_output["output"],
                            "elapsed_ms": cold_output["elapsed_ms"],
                            "checkpoint_overhead_ms": cold_output["checkpoint_overhead_ms"],
@@ -412,6 +432,10 @@ class LangGraphApi:
                              "checkpoint_overhead_ms": child_output["checkpoint_overhead_ms"],
                              "provider_usage": child_usage, "model_cost_usd": child_cost},
                   "net_model_saving_usd": saving,
+                  "cold_total_model_cost_usd": source_cost + cold_cost,
+                  "branch_total_model_cost_usd": source_cost + child_cost,
+                  "wall_time_saved_ms": cold_output["elapsed_ms"] - child_output["elapsed_ms"],
+                  "skipped_steps": skipped,
                   "skipped_step_saving_usd": skipped_cost,
                   "provider_cache_saving_usd": child_discount - cold_discount,
                   "duplicate_side_effects": duplicates,

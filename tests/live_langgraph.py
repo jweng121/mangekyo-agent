@@ -8,8 +8,11 @@ from conftest import execute_invoice_run
 
 
 def test_real_provider_branch_cost_and_correctness(langgraph_api):
-    assert os.environ.get("OPENAI_API_KEY"), "Set OPENAI_API_KEY for the live LangGraph test"
-    assert os.environ.get("MANGEKYO_LANGGRAPH_MODEL"), "Set MANGEKYO_LANGGRAPH_MODEL for the live test"
+    model = os.environ.get("MANGEKYO_LANGGRAPH_MODEL")
+    assert model, "Set MANGEKYO_LANGGRAPH_MODEL for the live test"
+    provider = "anthropic" if model.startswith("claude-") else "openai"
+    key_name = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
+    assert os.environ.get(key_name), f"Set {key_name} for the live LangGraph test"
     price_names = ("INPUT", "CACHED_INPUT", "CACHE_WRITE", "OUTPUT")
     rates = {}
     for name in price_names:
@@ -40,8 +43,8 @@ def test_real_provider_branch_cost_and_correctness(langgraph_api):
     })
     assert status == 200, report
     assert report["cold"]["output"] == report["branch"]["output"]
-    assert report["cold"]["provider_usage"]["provider"] == "openai"
-    assert report["branch"]["provider_usage"]["provider"] == "openai"
+    assert report["cold"]["provider_usage"]["provider"] == provider
+    assert report["branch"]["provider_usage"]["provider"] == provider
     assert report["duplicate_side_effects"] == 0
     assert report["correct_outcome"] is True
     assert report["saving_demonstrated"] is True, report

@@ -46,6 +46,43 @@ def test_provider_usage_is_taken_from_response(monkeypatch):
     assert output == "WRONG-ACCOUNT"
 
 
+def test_anthropic_usage_normalizes_cache_read_and_write(monkeypatch):
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            assert self.path == "/v1/messages"
+            assert self.headers["anthropic-version"] == "2026-10-21"
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert request["model"] == "claude-haiku-5-5"
+            body = json.dumps({"usage": {"input_tokens": 900, "cache_read_input_tokens": 200,
+                "cache_creation_input_tokens": 100, "output_tokens": 32},
+                "content": [{"type": "text", "text": "WRONG-ACCOUNT"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    monkeypatch.setenv("MANGEKYO_LANGGRAPH_MODEL", "claude-haiku-5-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
+    monkeypatch.setenv("MANGEKYO_ANTHROPIC_BASE_URL", f"http://127.0.0.1:{server.server_port}/v1/messages")
+    try:
+        usage, output = model_call("read_invoice", "Synthetic invoice")
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+    assert usage == {"provider": "anthropic", "model": "claude-haiku-5-5", "node": "read_invoice",
+                     "input_tokens": 1200, "cached_input_tokens": 200,
+                     "cache_write_tokens": 100, "output_tokens": 32}
+    assert output == "WRONG-ACCOUNT"
+
+
 @pytest.fixture
 def provider_transport(monkeypatch):
     calls = {"read": 0}

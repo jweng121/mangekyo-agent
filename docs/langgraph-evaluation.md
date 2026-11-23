@@ -36,12 +36,16 @@ that convention remain traceable but cannot demonstrate model cost savings.
 | `GET /api/v1/branches/{branch_id}/benchmark` | Retrieve the saved comparison without rerunning the model. |
 
 Mutation endpoints should reject invalid or mismatched graph/checkpoint IDs. A
-resume must reject unresolved actions before starting a child run. The price
+resume must reject unresolved actions and completed actions after the chosen
+checkpoint before starting a child run. A tool event with `action_key` and
+`action_state` records that action for these checks. The price
 rates passed to a benchmark are explicitly configured USD per million tokens;
 the benchmark must use provider-reported token counts, not a character-count
 estimate. A zero or unverified difference is reported as **no demonstrated
-saving**. The initial failed run's cost is common to both correction strategies
-and should be shown separately from the incremental rerun comparison.
+saving**. Flag the source run with a known expected result before a benchmark;
+without that result Mangekyo refuses to spend tokens on a cold rerun. The
+initial failed run's cost is common to both correction strategies and is shown
+separately from the incremental rerun comparison.
 
 The contained task reviews a synthetic invoice with a deliberately wrong
 proposed account (`WRONG-ACCOUNT`). The expected correction is `SAFE-ACCOUNT`.
@@ -89,13 +93,20 @@ pushes and pull requests; it does not spend provider tokens.
 
 ## Opt-in provider-backed check
 
-Set `OPENAI_API_KEY` in your environment. The example below uses the published
-[GPT-6 Luna Standard text-token rates](https://developers.openai.com/api/docs/models/gpt-6-luna)
-per million tokens as checked in November 2026; verify current rates before
-using the result as a cost claim. Then run:
+Set `ANTHROPIC_API_KEY` in the PowerShell session without printing the key:
 
 ```powershell
-$env:MANGEKYO_LANGGRAPH_MODEL = 'gpt-6-luna'
+$secureKey = Read-Host 'Anthropic API key' -AsSecureString
+$env:ANTHROPIC_API_KEY = [System.Net.NetworkCredential]::new('', $secureKey).Password
+```
+
+The example below uses the
+published [Claude Haiku 5.5 rates](https://platform.claude.com/docs/en/about-claude/pricing)
+for prompts below 100,000 tokens, checked in November 2026. Verify current
+rates before using the result as a cost claim. Then run:
+
+```powershell
+$env:MANGEKYO_LANGGRAPH_MODEL = 'claude-haiku-5-5'
 $env:MANGEKYO_TEST_PRICE_INPUT_USD_PER_M = '0.10'
 $env:MANGEKYO_TEST_PRICE_CACHED_INPUT_USD_PER_M = '0.01'
 $env:MANGEKYO_TEST_PRICE_CACHE_WRITE_USD_PER_M = '0.125'
@@ -107,3 +118,8 @@ This test uses a real provider call and is excluded from the normal suite so CI
 does not require an API key. It must fail if the branch does not demonstrate a
 net saving at the supplied rates; a provider prompt-cache hit is measured
 separately and is never assumed.
+
+For OpenAI instead, set `OPENAI_API_KEY`, change the model to `gpt-6-luna`, and
+use its current [published rates](https://developers.openai.com/api/docs/models/gpt-6-luna).
+The four example rate values above were the same for these two inexpensive
+models when checked, but always verify the rate for your provider and tier.

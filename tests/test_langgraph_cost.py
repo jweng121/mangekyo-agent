@@ -30,6 +30,9 @@ def test_branch_benchmark_proves_net_model_saving(langgraph_api):
     assert report["cold"]["output"] == report["branch"]["output"]
     assert report["cold"]["provider_usage"]["input_tokens"] > report["branch"]["provider_usage"]["input_tokens"]
     assert report["cold"]["model_cost_usd"] > report["branch"]["model_cost_usd"]
+    assert report["source"]["model_cost_usd"] > 0
+    assert "read_invoice" in report["skipped_steps"]
+    assert report["cold_total_model_cost_usd"] > report["branch_total_model_cost_usd"]
     assert report["net_model_saving_usd"] == pytest.approx(
         report["cold"]["model_cost_usd"] - report["branch"]["model_cost_usd"]
     )
@@ -85,3 +88,26 @@ def test_benchmark_refuses_a_cost_claim_without_a_resumed_branch(langgraph_api):
     })
     assert status == 409, report
     assert "error" in report
+
+
+def test_benchmark_requires_expected_outcome_before_cold_run(langgraph_api):
+    client, home = langgraph_api
+    parent_id, _ = execute_invoice_run(client)
+    detail = client.get(f"/api/v1/runs/{parent_id}")[1]
+    checkpoint = next(s for s in detail["snapshots"] if s["name"] == "after-read")
+    branch = client.post(f"/api/v1/runs/{parent_id}/branches", {
+        "snapshot_id": checkpoint["id"], "name": "missing-expected",
+        "correction": {"supplier_account": "SAFE-ACCOUNT"},
+    })[1]
+    assert client.post(f"/api/v1/branches/{branch['branch_id']}/resume", {})[0] == 200
+    from mangekyo.store import Store
+    with Store(home) as store:
+        before = len(store.runs())
+    status, report = client.post(f"/api/v1/branches/{branch['branch_id']}/benchmark", {
+        "price_per_million_usd": {"input": 1.0, "cached_input": .1,
+                                  "cache_write": 1.25, "output": 2.0},
+    })
+    assert status == 409, report
+    assert "expected outcome" in report["error"].lower()
+    with Store(home) as store:
+        assert len(store.runs()) == before
