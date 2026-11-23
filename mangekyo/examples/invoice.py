@@ -42,7 +42,9 @@ def model_call(node: str, prompt: str) -> tuple[dict[str, Any], str]:
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("OPENAI_API_KEY is required for the live LangGraph model")
-    body = {"model": model, "input": prompt, "max_output_tokens": 64}
+    body = {"model": model, "input": prompt, "max_output_tokens": 256}
+    if model == "gpt-6-luna":
+        body["reasoning"] = {"effort": "none"}
     request = urllib.request.Request(
         os.environ.get("MANGEKYO_LANGGRAPH_BASE_URL", "https://api.openai.com/v1/responses"),
         data=json.dumps(body).encode(),

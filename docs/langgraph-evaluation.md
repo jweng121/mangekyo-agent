@@ -89,15 +89,17 @@ pushes and pull requests; it does not spend provider tokens.
 
 ## Opt-in provider-backed check
 
-Set `OPENAI_API_KEY`, `MANGEKYO_LANGGRAPH_MODEL`, and the four explicit price
-variables below to the rates for the model you chose. Then run:
+Set `OPENAI_API_KEY` in your environment. The example below uses the published
+[GPT-6 Luna Standard text-token rates](https://developers.openai.com/api/docs/models/gpt-6-luna)
+per million tokens as checked in November 2026; verify current rates before
+using the result as a cost claim. Then run:
 
 ```powershell
-$env:MANGEKYO_LANGGRAPH_MODEL = 'YOUR_MODEL'
-$env:MANGEKYO_TEST_PRICE_INPUT_USD_PER_M = 'YOUR_RATE'
-$env:MANGEKYO_TEST_PRICE_CACHED_INPUT_USD_PER_M = 'YOUR_RATE'
-$env:MANGEKYO_TEST_PRICE_CACHE_WRITE_USD_PER_M = 'YOUR_RATE'
-$env:MANGEKYO_TEST_PRICE_OUTPUT_USD_PER_M = 'YOUR_RATE'
+$env:MANGEKYO_LANGGRAPH_MODEL = 'gpt-6-luna'
+$env:MANGEKYO_TEST_PRICE_INPUT_USD_PER_M = '0.10'
+$env:MANGEKYO_TEST_PRICE_CACHED_INPUT_USD_PER_M = '0.01'
+$env:MANGEKYO_TEST_PRICE_CACHE_WRITE_USD_PER_M = '0.125'
+$env:MANGEKYO_TEST_PRICE_OUTPUT_USD_PER_M = '0.50'
 .\.venv\Scripts\python.exe -m pytest tests/live_langgraph.py -q
 ```
 
