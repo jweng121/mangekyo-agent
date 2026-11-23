@@ -64,7 +64,8 @@ def serve(store_path: Path, *, port: int = 8765, open_browser: bool = True) -> N
                         run = store.one("runs", ident)
                         self._json(200, {"run": run, "events": store.events(ident),
                                          "snapshots": store.snapshots(ident), "artifacts": store.artifacts(ident),
-                                         "benchmark": benchmark(store, run["parent_run"] or ident) if run["adapter"] == "mangekyo.simulation" else None})
+                                         "benchmark": benchmark(store, run["parent_run"] or ident) if run["adapter"] == "mangekyo.simulation"
+                                         else langgraph_api.benchmarks_for_run(store, ident) if run["adapter"] == "langgraph" else None})
                 elif path.startswith("/api/artifact/"):
                     parts = path.split("/")
                     if len(parts) < 4:

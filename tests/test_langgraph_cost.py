@@ -46,6 +46,9 @@ def test_branch_benchmark_proves_net_model_saving(langgraph_api):
     status, saved = client.get(f"/api/v1/branches/{branch['branch_id']}/benchmark")
     assert status == 200, saved
     assert saved == report
+    status, dashboard = client.get(f"/api/run/{parent_id}")
+    assert status == 200, dashboard
+    assert dashboard["benchmark"][0] == report
 
 
 def test_cheaper_but_wrong_branch_is_not_called_a_saving(langgraph_api):

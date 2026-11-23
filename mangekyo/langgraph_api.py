@@ -106,6 +106,22 @@ class LangGraphApi:
             raise ValueError("MANGEKYO_LANGGRAPH_GRAPHS must map names to module:factory")
         self.lock = threading.RLock()
 
+    def benchmarks_for_run(self, store: Store, run_id: str) -> list[dict]:
+        """Return saved branch comparisons for the dashboard's run inspector."""
+        run = store.one("runs", run_id)
+        root_id = run["parent_run"] or run_id
+        reports = []
+        for branch in store.branches():
+            if not branch["result_run"]:
+                continue
+            snap = store.one("snapshots", branch["source_snapshot"])
+            if snap["run_id"] != root_id:
+                continue
+            event = _event(store, branch["result_run"], "branch_benchmark")
+            if event:
+                reports.append(event["payload"])
+        return reports
+
     def _factory(self, alias: str):
         spec = self.graphs.get(alias)
         if not spec:
