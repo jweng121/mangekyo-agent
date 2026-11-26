@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/github/mangekyo-agent-wordmark.png" alt="MANGEKYO-AGENT" width="100%">
+  <img src="assets/github/mangekyo-agent-banner.png" alt="MANGEKYO-AGENT red pixel-art wordmark on a dark banner" width="100%">
 </p>
 
 <h1 align="center">Mangekyo Agent</h1>
