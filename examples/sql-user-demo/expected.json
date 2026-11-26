@@ -1,0 +1,8 @@
+{
+  "expected": {
+    "output": {
+      "table": "bookings",
+      "count": 3
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "expected": {
+    "payload": {
+      "result": {
+        "table": "bookings"
+      }
+    }
+  }
+}

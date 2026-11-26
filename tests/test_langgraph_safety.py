@@ -1,10 +1,35 @@
 """Unsafe or incompatible resumes must fail without creating a child run."""
 
 from conftest import execute_invoice_run, register_invoice_run
+from mangekyo.langgraph_api import ApiError, LangGraphApi
 from mangekyo.store import Store
+import pytest
 
 
-def test_unresolved_action_blocks_resume(langgraph_api):
+def test_resume_requires_environment_validator(langgraph_api, monkeypatch):
+    from mangekyo.examples import invoice
+
+    client, home = langgraph_api
+    parent_id, _ = execute_invoice_run(client)
+    detail = client.get(f"/api/v1/runs/{parent_id}")[1]
+    checkpoint = next(s for s in detail["snapshots"] if s["name"] == "after-read")
+    branch = client.post(f"/api/v1/runs/{parent_id}/branches", {
+        "snapshot_id": checkpoint["id"], "name": "no-environment-proof",
+        "correction": {"supplier_account": "SAFE-ACCOUNT"},
+    })[1]
+    monkeypatch.delattr(invoice.build_graph, "validate_checkpoint")
+    with Store(home) as store:
+        before = len(store.runs())
+        api = LangGraphApi(home)
+        api.graphs = {"invoice": "mangekyo.examples.invoice:build_graph"}
+        with pytest.raises(ApiError, match="no checkpoint environment validator"):
+            api._resume(store, branch["branch_id"])
+        assert len(store.runs()) == before
+        assert store.one("branches", branch["branch_id"])["result_run"] is None
+
+
+@pytest.mark.parametrize("action_state", ["intent", "failed"])
+def test_unresolved_action_blocks_resume(langgraph_api, action_state):
     client, home = langgraph_api
     parent_id, _ = execute_invoice_run(client)
     status, detail = client.get(f"/api/v1/runs/{parent_id}")
@@ -16,7 +41,7 @@ def test_unresolved_action_blocks_resume(langgraph_api):
     })
     assert status == 201, branch
     with Store(home) as store:
-        store.action(parent_id, "payment-42", "intent")
+        store.action(parent_id, "payment-42", action_state)
         before = len(store.runs())
 
     status, error = client.post(f"/api/v1/branches/{branch['branch_id']}/resume", {})
@@ -43,6 +68,57 @@ def test_completed_action_after_checkpoint_blocks_resume(langgraph_api):
         "correction": {"supplier_account": "SAFE-ACCOUNT"},
     })[1]
     with Store(home) as store:
+        before = len(store.runs())
+    status, error = client.post(f"/api/v1/branches/{branch['branch_id']}/resume", {})
+    assert status == 409, error
+    assert "completed action" in error["error"].lower()
+    with Store(home) as store:
+        assert len(store.runs()) == before
+
+
+def test_intent_before_checkpoint_completed_after_is_blocked(langgraph_api):
+    client, home = langgraph_api
+    parent_id, _ = execute_invoice_run(client)
+    detail = client.get(f"/api/v1/runs/{parent_id}")[1]
+    checkpoint = next(s for s in detail["snapshots"] if s["name"] == "after-read")
+    branch = client.post(f"/api/v1/runs/{parent_id}/branches", {
+        "snapshot_id": checkpoint["id"], "name": "late-completion",
+        "correction": {"supplier_account": "SAFE-ACCOUNT"},
+    })[1]
+    with Store(home) as store:
+        store.action(parent_id, "payment-42", "intent")
+        store.db.execute("UPDATE actions SET created=? WHERE run_id=? AND action_key=?",
+                         (checkpoint["created"] - 1, parent_id, "payment-42"))
+        store.db.commit()
+        store.action(parent_id, "payment-42", "completed", {"sent": True})
+        before = len(store.runs())
+        action = store.db.execute("SELECT created FROM actions WHERE run_id=? AND action_key=?",
+                                  (parent_id, "payment-42")).fetchone()
+        assert action[0] > checkpoint["created"]
+    status, error = client.post(f"/api/v1/branches/{branch['branch_id']}/resume", {})
+    assert status == 409, error
+    assert "completed action" in error["error"].lower()
+    with Store(home) as store:
+        assert len(store.runs()) == before
+        assert store.one("branches", branch["branch_id"])["result_run"] is None
+
+
+def test_old_action_timestamp_is_checked_against_completion_event(langgraph_api):
+    client, home = langgraph_api
+    parent_id, _ = execute_invoice_run(client)
+    detail = client.get(f"/api/v1/runs/{parent_id}")[1]
+    checkpoint = next(s for s in detail["snapshots"] if s["name"] == "after-read")
+    branch = client.post(f"/api/v1/runs/{parent_id}/branches", {
+        "snapshot_id": checkpoint["id"], "name": "old-ledger-timestamp",
+        "correction": {"supplier_account": "SAFE-ACCOUNT"},
+    })[1]
+    with Store(home) as store:
+        store.action(parent_id, "payment-42", "completed", {"sent": True})
+        store.db.execute("UPDATE actions SET created=? WHERE run_id=? AND action_key=?",
+                         (checkpoint["created"] - 1, parent_id, "payment-42"))
+        store.db.commit()
+        store.event(parent_id, "tool", {"node": "payment", "payload": {
+            "action_key": "payment-42", "action_state": "completed"}})
         before = len(store.runs())
     status, error = client.post(f"/api/v1/branches/{branch['branch_id']}/resume", {})
     assert status == 409, error

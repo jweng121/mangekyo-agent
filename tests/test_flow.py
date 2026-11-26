@@ -18,16 +18,21 @@ class ReferenceFlowTest(unittest.TestCase):
             demo = run_demo(store)
             target = Path(demo["target"])
             self.assertEqual(target.read_text(), "unsafe")
+            with self.assertRaisesRegex(ValueError, "Resume a corrected branch"):
+                benchmark(store, demo["run_id"], create_baseline=True)
+            self.assertEqual(len(store.runs()), 1)
             store.branch(demo["snapshot_id"], "fixed", {"replacement": "safe"})
             self.assertIsNone(resume_unavailable_reason(store, "fixed"))
             result = resume(store, "fixed")
-            self.assertEqual(target.read_text(), "safe")
+            self.assertEqual(target.read_text(), "unsafe")
+            self.assertEqual(Path(result["target"]).read_text(), "safe")
             self.assertEqual(result["duplicate_actions"], 0)
             self.assertEqual(store.one("runs", result["run_id"])["status"], "completed")
             report = benchmark(store, demo["run_id"], create_baseline=True)
             self.assertEqual(report["recovered"][0]["skipped_steps"], 2)
             self.assertEqual(report["recovered"][0]["provider_cached_tokens"], "not reported")
             self.assertTrue(report["cold_baselines"])
+            self.assertEqual(len(benchmark(store, demo["run_id"], create_baseline=True)["cold_baselines"]), 1)
             with self.assertRaises(ValueError):
                 resume(store, "fixed")
             self.assertIn("Already resumed", resume_unavailable_reason(store, "fixed"))
@@ -123,6 +128,22 @@ class ReferenceFlowTest(unittest.TestCase):
                 (store.objects / "orphan" / ".pending-interrupted").write_text("partial")
             with Store(root) as reopened:
                 self.assertEqual(reopened.context(snap)["messages"], ["original"])
+
+    def test_cache_stats_measures_shared_snapshot_context(self):
+        with tempfile.TemporaryDirectory() as root, Store(root) as store:
+            run = store.create_run("agent", "reuse")
+            first = store.snapshot(run, "first", {"shared": {"large": "same" * 100},
+                                                   "changed": "old"})
+            second = store.snapshot(run, "second", {"shared": {"large": "same" * 100},
+                                                     "changed": "new"}, parent_id=first)
+            stats = store.stats()
+            self.assertEqual(stats["context_object_references"], 4)
+            self.assertEqual(stats["context_unique_objects"], 3)
+            self.assertGreater(stats["context_saved_bytes"], 0)
+            self.assertEqual(stats["context_logical_bytes"] - stats["context_physical_bytes"],
+                             stats["context_saved_bytes"])
+            self.assertEqual(store.context(first)["changed"], "old")
+            self.assertEqual(store.context(second)["changed"], "new")
 
 
 if __name__ == "__main__":

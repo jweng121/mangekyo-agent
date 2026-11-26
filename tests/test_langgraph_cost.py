@@ -1,12 +1,19 @@
 """Branch cost must use recorded provider usage and a matched cold rerun."""
 
+import json
+import subprocess
+import sys
+
 import pytest
+
+from mangekyo.store import Store
+from mangekyo.langgraph_api import _with_cache_note
 
 from conftest import execute_invoice_run
 
 
 def test_branch_benchmark_proves_net_model_saving(langgraph_api):
-    client, _ = langgraph_api
+    client, home = langgraph_api
     parent_id, _ = execute_invoice_run(client)
     assert client.post(f"/api/v1/runs/{parent_id}/flags", {
         "reason": "Approved supplier record disagrees with proposed account",
@@ -45,6 +52,11 @@ def test_branch_benchmark_proves_net_model_saving(langgraph_api):
     assert report["correct_outcome"] is True
     assert report["skipped_step_saving_usd"] > 0
     assert "provider_cache_saving_usd" in report
+    assert report["provider_cache_saving_usd"] == 0
+    assert "0 provider cache-read tokens" in report["provider_cache_note"]
+    legacy = {key: value for key, value in report.items() if key != "provider_cache_note"}
+    assert _with_cache_note(legacy)["provider_cache_note"] == report["provider_cache_note"]
+    assert "provider_cache_note" not in legacy
     assert report["duplicate_side_effects"] == 0
 
     status, saved = client.get(f"/api/v1/branches/{branch['branch_id']}/benchmark")
@@ -53,6 +65,31 @@ def test_branch_benchmark_proves_net_model_saving(langgraph_api):
     status, dashboard = client.get(f"/api/run/{parent_id}")
     assert status == 200, dashboard
     assert dashboard["benchmark"][0] == report
+    with Store(home) as store:
+        def segments(run_id, node):
+            return next(event["payload"]["usage"]["request_segments"]
+                        for event in store.events(run_id)
+                        if event["kind"] == "model" and event["payload"]["node"] == node)
+
+        assert segments(parent_id, "read_invoice")["stable_prefix_sha256"] == \
+            segments(report["cold"]["run_id"], "read_invoice")["stable_prefix_sha256"]
+        assert segments(parent_id, "propose_payment")["stable_prefix_sha256"] == \
+            segments(report["branch"]["run_id"], "propose_payment")["stable_prefix_sha256"]
+        assert segments(parent_id, "propose_payment")["changing_suffix_sha256"] != \
+            segments(report["branch"]["run_id"], "propose_payment")["changing_suffix_sha256"]
+        before = len(store.runs())
+    shown = subprocess.run(
+        [sys.executable, "-m", "mangekyo", "--home", str(home), "benchmark", parent_id],
+        capture_output=True, text=True, check=True,
+    )
+    assert json.loads(shown.stdout)["saved_branch_benchmarks"] == [report]
+    branch_shown = subprocess.run(
+        [sys.executable, "-m", "mangekyo", "--home", str(home), "show", branch["branch_id"]],
+        capture_output=True, text=True, check=True,
+    )
+    assert json.loads(branch_shown.stdout)["benchmark"] == report
+    with Store(home) as store:
+        assert len(store.runs()) == before
 
 
 def test_cheaper_but_wrong_branch_is_not_called_a_saving(langgraph_api):

@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" type="image/png" href="/logo.png">
   <title>Mangekyo Agent · Run history</title>
   <style>
     :root { color-scheme:light; font:13px/1.55 Inter,"Segoe UI",Arial,sans-serif; background:#faf9fa; color:#423d40 }
@@ -12,8 +13,8 @@
     button:focus-visible,input:focus-visible,a:focus-visible { outline:2px solid #b44370; outline-offset:2px }
     input { background:#fff; color:#423d40; border:1px solid #e4dce1; border-radius:8px; padding:8px 10px; min-width:0 }
     header { display:flex; align-items:center; justify-content:space-between; gap:16px; border-bottom:1px solid #ece6e9; padding:8px 20px; background:#fff }
-    .brand { display:flex; align-items:center; gap:12px; min-width:0 } .brand img { width:42px; height:42px; flex:none; object-fit:contain }
-    .brand span { color:#51464c; white-space:nowrap; display:block; font-weight:500 } .brand small { display:block; color:#a18f99; font-size:10px; max-width:42vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .brand { display:flex; align-items:center; gap:12px; min-width:0 } .brand .brand-icon { width:52px; height:52px; flex:none; object-fit:contain }
+    .brand .brand-banner { width:min(355px,calc(100vw - 150px)); height:50px; object-fit:contain; object-position:left center }
     main { display:grid; grid-template-columns:220px minmax(390px,1fr) minmax(340px,1fr); height:calc(100vh - 65px) }
     section { overflow:auto; border-right:1px solid #ece6e9; min-width:0; background:#fff } section:first-child { background:#fcfafb } section:last-child { border-right:0 }
     h2 { font-size:12px; letter-spacing:.01em; font-weight:600; color:#65545e; padding:18px 17px 10px; margin:0; position:sticky; top:0; background:inherit; z-index:1 }
@@ -38,34 +39,87 @@
     .graph { position:relative; height:158px; width:max-content; min-width:100%; background:#fff }
     .graph svg { position:absolute; inset:0; pointer-events:none; overflow:visible }
     .graph path { fill:none; stroke:#d6d7d5; stroke-width:2 }
-    .graph path.abandoned { stroke:#d5cbd0; stroke-dasharray:4 5 }
-    .graph path.fork { stroke:#6f9a7c; stroke-width:2.5 }
-    .graph.playing path.fork { stroke-dasharray:7 5; animation:edge-flow .65s linear infinite }
+    .graph path.abandoned { stroke:#b43732; stroke-opacity:.65; stroke-dasharray:4 5 }
+    .graph path.fork { stroke:#39805a; stroke-width:2.5 }
+    .graph path.feedback { stroke:#39805a; stroke-opacity:.7; stroke-width:1.5; stroke-dasharray:3 5; marker-end:url(#feedback-arrow) }
+    .graph.playing path.fork,.graph.playing path.feedback { stroke-dasharray:7 5; animation:edge-flow .65s linear infinite }
     .graph.success path.fork { animation:edge-glow 1.1s ease-in-out }
-    .graph-node { position:absolute; width:110px; padding:3px 4px; border:0; background:transparent; text-align:center; color:#766e72; font-size:10px; line-height:1.25 }
-    .graph-node .dot { display:block; width:17px; height:17px; margin:0 auto 6px; border:2px solid #aab1ab; border-radius:50%; background:#fff; box-shadow:0 0 0 3px #fff }
-    .graph-node.active .dot { border-color:#b44370; background:#b44370; box-shadow:0 0 0 3px #fff,0 0 0 5px #efd1df }
-    .graph-node.failed .dot { border-color:#bd6b60; background:#bd6b60 }
-    .graph-node.corrected .dot { border-color:#5d9873; background:#dcece1 }
-    .graph-node.corrected.completed .dot { background:#5d9873 }
+    .graph-node { --node-color:#89918c; --node-bg:#fff; position:absolute; width:110px; padding:3px 4px; border:0; background:transparent; text-align:center; color:#766e72; font-size:10px; line-height:1.25 }
+    .graph-node .dot { display:block; width:17px; height:17px; margin:0 auto 6px; border:2px solid var(--node-color); border-radius:50%; background:var(--node-bg); box-shadow:0 0 0 3px #fff }
+    .graph-node.event-action { --node-color:#2476a2; --node-bg:#e5f2f8 }
+    .graph-node.event-error { --node-color:#b43732; --node-bg:#b43732 }
+    .graph-node.event-verified { --node-color:#39805a; --node-bg:#e5f3e9 }
+    .graph-node.corrected .dot { box-shadow:0 0 0 3px #fff,0 0 0 5px #39805a }
+    .graph-node.active .dot { box-shadow:0 0 0 3px #fff,0 0 0 6px #302a32 }
     .graph-node.pending .dot { border-style:dashed }
+    .graph-node.fresh .dot { animation:node-arrive .7s ease-out }
+    .graph-node.live-tip .dot { animation:node-pulse 1.5s ease-in-out infinite }
     .graph-node span:last-child { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-    .graph-legend { display:flex; gap:12px; padding:6px 17px 9px; color:#968791; font-size:10px }
-    .graph-legend span::before { content:'●'; margin-right:4px } .graph-legend .original::before { color:#aab1ab } .graph-legend .failed::before { color:#bd6b60 } .graph-legend .corrected::before { color:#5d9873 }
+    #live-indicator { color:#b44370; font-size:11px; font-weight:600; margin-right:12px }
+    .graph-legend { display:flex; flex-wrap:wrap; gap:5px 12px; padding:6px 17px 9px; border-bottom:1px solid #eee7eb; color:#6d6870; font-size:10px }
+    .graph-legend span::before { content:''; display:inline-block; width:8px; height:8px; margin-right:5px; border-radius:50%; background:var(--legend-color); vertical-align:middle }
+    .graph-legend .normal { --legend-color:#89918c } .graph-legend .action { --legend-color:#2476a2 } .graph-legend .failed { --legend-color:#b43732 } .graph-legend .corrected { --legend-color:#39805a }
+    .benchmark-summary { margin:4px 17px 14px; padding:12px; border:1px solid #e8dce2; border-radius:10px; background:#fffafd }
+    .benchmark-summary h2 { position:static; padding:0 0 8px; background:transparent }
+    .benchmark-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(115px,1fr)); gap:8px; margin:8px 0 }
+    .benchmark-metric { padding:8px; border-radius:7px; background:#f8f0f4 }
+    .benchmark-metric strong { display:block; font-size:16px; color:#654254 }
+    .benchmark-metric span { display:block; font-size:10px; color:#806f79 }
+    .benchmark-summary p { margin:6px 0; font-size:11px; color:#786c73 }
+    .capture-summary { margin-top:12px; padding:10px; border:1px solid #e8dce2; border-radius:8px; background:#fffafd; color:#51474d }
+    .capture-fields { display:flex; flex-wrap:wrap; gap:5px 12px; margin:7px 0 }
+    .capture-field { font-size:11px }
+    .capture-field strong { font-weight:600 }
     .list-mode .graph-scroll,.list-mode .graph-legend { display:none }
     .track-mode #events { display:none }
     @keyframes edge-flow { to { stroke-dashoffset:-12 } } @keyframes edge-glow { 50% { stroke:#32aa61; filter:drop-shadow(0 0 5px #65b985) } }
-    @media(prefers-reduced-motion:reduce) { .graph.playing path.fork,.graph.success path.fork { animation:none } }
-    @media(max-width:900px) { main { display:block; height:auto } section { max-height:65vh; border-right:0; border-bottom:1px solid #ece6e9 } .brand small { max-width:45vw } }
+    @keyframes node-arrive { from { transform:scale(.4); opacity:.2; box-shadow:0 0 0 12px var(--node-bg) } to { transform:scale(1); opacity:1; box-shadow:0 0 0 3px #fff } }
+    @keyframes node-pulse { 50% { box-shadow:0 0 0 7px var(--node-bg) } }
+    @media(prefers-reduced-motion:reduce) { .graph.playing path.fork,.graph.playing path.feedback,.graph.success path.fork,.graph-node.fresh .dot,.graph-node.live-tip .dot { animation:none } }
+    #chat-panel { position:fixed; z-index:20; right:0; top:58px; bottom:0; width:min(440px,100vw); background:#fff; border-left:1px solid #e6dce1; box-shadow:-12px 0 35px #33202d24; display:flex; flex-direction:column; padding:16px; gap:10px }
+    #chat-panel[hidden] { display:none }
+    #chat-panel h2 { margin:0; position:static; padding:0 }
+    #chat-panel label { font-weight:600; color:#6b5260 }
+    #chat-panel select,#chat-panel textarea { width:100%; border:1px solid #e4dce1; border-radius:8px; padding:8px; font:inherit; background:#fff; color:#423d40 }
+    #chat-panel textarea { resize:vertical; min-height:68px }
+    #chat-messages { flex:1; overflow:auto; display:flex; flex-direction:column; gap:10px; min-height:80px }
+    .chat-message { padding:10px; border-radius:9px; white-space:pre-wrap; overflow-wrap:anywhere; background:#f8f2f5 }
+    .chat-message.user { align-self:flex-end; background:#f0e5eb }
+    #chat-setup { display:grid; gap:8px; overflow:auto }
+    #chat-setup[hidden],#chat-workspace[hidden] { display:none }
+    #chat-workspace { display:flex; flex-direction:column; flex:1; min-height:0; gap:8px }
+    .chat-row { display:flex; gap:8px; align-items:center }
+    .chat-row input { flex:1 }
+    @media(max-width:900px) { main { display:block; height:auto } section { max-height:65vh; border-right:0; border-bottom:1px solid #ece6e9 } }
   </style>
 </head>
 <body>
-  <header><div class="brand"><img src="/logo.png" alt="Mangekyo logo"><div><span>Mangekyo Agent</span><small id="store-path">Loading store…</small></div></div><button id="refresh">Refresh</button></header>
+  <header><div class="brand"><img class="brand-icon" src="/logo.png" alt="Mangekyo logo"><img class="brand-banner" src="/terminal-banner.png" alt="Mangekyo Agent"></div><div><span id="live-indicator" role="status"></span><button id="chat-toggle" type="button">Chat</button><button id="refresh">Refresh</button></div></header>
   <main>
-    <section><h2>Runs and branches</h2><div id="runs"></div><h2>Branches</h2><div id="branches"></div></section>
-    <section id="timeline" class="track-mode"><div class="timeline-heading">Execution timeline <button id="view-toggle" type="button">List view</button></div><div id="summary" class="panel muted">Select a run.</div><div class="graph-scroll"><div id="graph" class="graph"></div></div><div class="graph-legend"><span class="original">Original</span><span class="failed">Failed path</span><span class="corrected">Corrected branch</span></div><div id="events"></div><h2>Evidence</h2><div id="artifacts"></div></section>
-    <section><h2>Inspector</h2><div id="inspector" class="panel empty">Select an event or checkpoint to inspect its captured context.</div><div id="notice"></div></section>
+    <section><h2>Agent project</h2><div class="form"><label for="project-path">Project folder</label><input id="project-path" placeholder="Path to your Python agent"><div class="chat-row"><button id="project-add" type="button">Connect agent</button><button id="project-launch" type="button">Launch run</button></div><div id="project-status" class="muted"></div></div><h2>Runs and branches</h2><div id="runs"></div><h2>Branches</h2><div id="branches"></div></section>
+    <section id="timeline" class="track-mode"><div class="timeline-heading">Execution timeline <button id="view-toggle" type="button">List view</button></div><div id="summary" class="panel muted">Select a run.</div><div id="benchmark-summary" class="benchmark-summary" aria-live="polite"></div><div class="graph-scroll"><div id="graph" class="graph"></div></div><div class="graph-legend"><span class="normal">Normal event</span><span class="action">Tool / checkpoint</span><span class="failed">Error / failed path</span><span class="corrected">Verified / corrected</span></div><div id="events"></div><h2>Evidence</h2><div id="artifacts"></div></section>
+    <section><h2>Inspector</h2><div class="form"><label for="check-file">Expected case file</label><input id="check-file" value="expected.json"><div class="chat-row"><button id="check-run" type="button">Check run</button><button id="check-event" type="button">Check selected event</button></div><label for="mark-reason">Why is the selected event wrong?</label><input id="mark-reason" placeholder="Reason"><button id="mark-event" type="button">Mark event</button></div><div id="inspector" class="panel empty">Select an event or checkpoint to inspect its captured context.</div><div id="notice"></div></section>
   </main>
+  <aside id="chat-panel" hidden aria-label="Debugging chat">
+    <div class="chat-row"><h2 style="flex:1">Debugging chat</h2><button id="chat-close" type="button" aria-label="Close chat">×</button></div>
+    <div id="chat-setup" hidden>
+      <p>Connect a model to ask questions about your runs. Run inspection and checks remain available without one.</p>
+      <label for="chat-provider">Provider</label><select id="chat-provider"><option value="openai">OpenAI API</option><option value="openrouter">OpenRouter API</option><option value="local">Local model</option><option value="custom">Custom endpoint</option></select>
+      <label for="chat-model">Model name</label><input id="chat-model" placeholder="Model ID">
+      <label for="chat-endpoint">Endpoint (for local or custom)</label><input id="chat-endpoint" placeholder="http://127.0.0.1:11434/v1">
+      <label for="chat-key">API key (saved in OS credential store)</label><input id="chat-key" type="password" autocomplete="off">
+      <label for="chat-key-env">Or environment variable name</label><input id="chat-key-env" placeholder="OPENAI_API_KEY">
+      <button id="chat-connect" type="button">Save and test connection</button>
+      <button id="chat-openrouter-signin" type="button" hidden>Sign in with OpenRouter</button>
+    </div>
+    <div id="chat-workspace" hidden>
+      <div class="chat-row"><label for="chat-run">Run</label><select id="chat-run" style="flex:1"><option value="">No run selected</option></select><button id="chat-change-model" type="button">Model</button></div>
+      <div id="chat-messages" role="log" aria-live="polite"></div>
+      <textarea id="chat-input" placeholder="Ask about this run or request an eval suggestion"></textarea>
+      <button id="chat-send" type="button">Send</button>
+    </div>
+    <div id="chat-notice" role="status" class="muted"></div>
+  </aside>
   <script src="/app.js" defer></script>
 </body>
 </html>

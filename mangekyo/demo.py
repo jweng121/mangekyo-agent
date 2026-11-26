@@ -10,6 +10,7 @@ from .store import Store
 
 ADAPTER = "mangekyo.simulation"
 ADAPTER_VERSION = "1"
+FIXTURES = Path(__file__).parent / "assets"
 
 
 def run_demo(store: Store) -> dict[str, str]:
@@ -20,6 +21,19 @@ def run_demo(store: Store) -> dict[str, str]:
     target.write_text("original", encoding="utf-8")
     started = time.perf_counter()
     store.event(run_id, "observation", {"text": "Target begins in its original state.", "path": str(target)})
+    pdf_event = store.event(run_id, "read", {"name": "read-pdf", "document": "demo-instruction.pdf",
+                                              "parsed": {"approved_value": "safe", "prohibited_value": "unsafe"}})
+    pdf_id = store.artifact(run_id, "demo-instruction.pdf", (FIXTURES / "demo-instruction.pdf").read_bytes(),
+                            "application/pdf", event_id=pdf_event,
+                            parsed_text="Task: update the disposable target file\nApproved value: safe\nDo not write: unsafe",
+                            source="bundled synthetic demo")
+    store.annotate(pdf_id, 0, .10, .246, .40, .031, "Parsed approved value: safe")
+    image_event = store.event(run_id, "read", {"name": "read-image", "document": "demo-target.png",
+                                                "parsed": {"current_value": "original"}})
+    image_id = store.artifact(run_id, "demo-target.png", (FIXTURES / "demo-target.png").read_bytes(),
+                              "image/png", event_id=image_event, parsed_text="Current value: original",
+                              source="bundled synthetic demo")
+    store.annotate(image_id, 0, .10, .53, .79, .20, "Parsed current value: original")
     store.event(run_id, "decision", {"plan": "unsafe", "reason": "Deliberately wrong reference decision"})
     snap_id = store.snapshot(run_id, "before-action", {
         "instructions": "Only write 'safe' to the disposable target.",
@@ -37,7 +51,8 @@ def run_demo(store: Store) -> dict[str, str]:
     elapsed = round((time.perf_counter() - started) * 1000, 2)
     store.event(run_id, "metrics", {"elapsed_ms": elapsed, "model_calls": 0, "provider_cached_tokens": None})
     store.status(run_id, "failed")
-    return {"run_id": run_id, "snapshot_id": snap_id, "target": str(target),
+    return {"run_id": run_id, "snapshot_id": snap_id, "store_path": str(store.path),
+            "target": str(target),
             "elapsed_ms": str(elapsed)}
 
 
@@ -55,16 +70,26 @@ def resume_unavailable_reason(store: Store, branch_name: str) -> str | None:
     if value != "safe":
         return "Reference adapter requires correction replacement='safe'"
     original_run = snap["run_id"]
-    pending = store.db.execute("SELECT * FROM actions WHERE run_id=? AND state='intent'", (original_run,)).fetchall()
+    pending = store.db.execute("SELECT * FROM actions WHERE run_id=? AND state IN ('intent','failed')", (original_run,)).fetchall()
     if pending:
-        return "Original run has unresolved actions; reconcile before resuming"
+        return f"Original run has unresolved action {pending[0]['action_key']}; reconcile before resuming"
     environment = store.get(snap["env_hash"])
-    target = Path(environment["target"]).resolve()
+    source_target = Path(environment["target"]).resolve()
     expected_parent = (store.path / "simulation" / original_run).resolve()
-    if target.parent != expected_parent:
+    if source_target.parent != expected_parent:
         return "Environment target is outside the disposable simulation"
-    if not target.exists():
+    if not source_target.exists():
         return "Simulation target is missing"
+    completed = store.db.execute(
+        "SELECT result_hash FROM actions WHERE run_id=? AND action_key='write-target' AND state='completed'",
+        (original_run,)).fetchone()
+    if completed:
+        result = store.get(completed[0]) if completed[0] else None
+        expected_current = result.get("content") if isinstance(result, dict) else None
+        if not isinstance(expected_current, str) or source_target.read_text(encoding="utf-8") != expected_current:
+            return "Simulation target changed since the recorded action; reconcile before resuming"
+    elif source_target.read_text(encoding="utf-8") != environment["content"]:
+        return "Simulation target changed without a recorded completed action; reconcile before resuming"
     return None
 
 
@@ -78,22 +103,24 @@ def resume(store: Store, branch_name: str) -> dict[str, Any]:
     correction = store.get(branch["correction_hash"])
     value = correction["replacement"]
     environment = store.get(snap["env_hash"])
-    target = Path(environment["target"]).resolve()
     started = time.perf_counter()
+    run_id = store.claim_branch(branch_name, "reference-agent", f"Recovery: {branch_name}",
+                                parent_run=original_run, adapter=ADAPTER,
+                                adapter_version=ADAPTER_VERSION)
+    target = store.path / "simulation" / run_id / "target.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(environment["content"], encoding="utf-8")
-    run_id = store.create_run("reference-agent", f"Recovery: {branch_name}", parent_run=original_run,
-                              adapter=ADAPTER, adapter_version=ADAPTER_VERSION)
-    with store.db:
-        store.db.execute("UPDATE branches SET result_run=? WHERE name=? AND result_run IS NULL", (run_id, branch_name))
     context = store.context(snap["id"])
     skipped = context["runtime_state"].get("completed_steps", [])
     store.event(run_id, "restore", {"source_snapshot": snap["id"], "environment": "restored",
                                      "skipped_steps": skipped})
     context["messages"] = context["messages"] + [{"role": "user", "content": "Write safe instead."}]
-    context["runtime_state"] = context["runtime_state"] | {"branch": branch_name}
+    context["runtime_state"] = context["runtime_state"] | {"branch": branch_name,
+                                                            "target": str(target)}
+    branch_environment = {"target": str(target), "content": environment["content"]}
     new_snap = store.snapshot(run_id, "corrected-before-action", context, parent_id=snap["id"],
                               adapter=ADAPTER, adapter_version=ADAPTER_VERSION,
-                              environment=environment)
+                              environment=branch_environment)
     store.action(run_id, "corrected-write", "intent")
     target.write_text(value, encoding="utf-8")
     store.action(run_id, "corrected-write", "completed", {"content": value})
@@ -108,6 +135,7 @@ def resume(store: Store, branch_name: str) -> dict[str, Any]:
     original_keys = {r[0] for r in store.db.execute("SELECT action_key FROM actions WHERE run_id=?", (original_run,))}
     resumed_keys = {r[0] for r in store.db.execute("SELECT action_key FROM actions WHERE run_id=?", (run_id,))}
     return {"run_id": run_id, "source_run": original_run, "source_snapshot": snap["id"],
+            "target": str(target),
             "skipped_steps": len(skipped), "duplicate_actions": len(original_keys & resumed_keys),
             "elapsed_ms": elapsed}
 
@@ -137,7 +165,12 @@ def benchmark(store: Store, run_id: str, *, create_baseline: bool = False) -> di
     run = store.one("runs", run_id)
     if run["adapter"] != ADAPTER:
         raise ValueError("First-draft benchmark supports the reference simulation adapter")
-    if create_baseline:
+    if create_baseline and not any(b["result_run"] and store.one("snapshots", b["source_snapshot"])["run_id"] == run_id
+                                   for b in store.branches()):
+        raise ValueError("Resume a corrected branch before benchmarking")
+    existing_baseline = any(r["parent_run"] == run_id and r["label"] == "Cold corrected baseline"
+                            and r["status"] == "completed" for r in store.runs())
+    if create_baseline and not existing_baseline:
         cold_baseline(store, run_id)
     cold_runs = [r for r in store.runs() if r["parent_run"] == run_id and r["label"] == "Cold corrected baseline"]
     baselines = [{"run_id": r["id"], "elapsed_ms": next((e["payload"]["elapsed_ms"] for e in store.events(r["id"])

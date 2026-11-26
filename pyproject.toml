@@ -1,18 +1,40 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mangekyo-agent"
-version = "0.1.1"
+version = "0.2.0b1"
 description = "Local execution history and recovery for Python agents"
-readme = "README.md"
+readme = "PYPI_README.md"
 requires-python = ">=3.11"
-dependencies = []
+authors = [{name = "James Weng"}]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["agents", "checkpoints", "debugging", "recovery", "observability"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = ["keyring>=25,<27"]
+
+[project.urls]
+Homepage = "https://github.com/jweng121/mangekyo-agent"
+Documentation = "https://github.com/jweng121/mangekyo-agent/tree/main/docs"
+Issues = "https://github.com/jweng121/mangekyo-agent/issues"
+Source = "https://github.com/jweng121/mangekyo-agent"
 
 [project.optional-dependencies]
 tui = ["prompt-toolkit>=3.0,<4"]
-evidence = ["pypdfium2>=4,<6", "playwright>=1.50,<2"]
+evidence = ["pypdfium2>=4,<6", "Pillow>=10,<13", "playwright>=1.50,<2"]
 langgraph = ["langgraph>=1.2,<2", "langgraph-checkpoint-sqlite>=3.1,<4"]
 
 [project.scripts]
@@ -22,4 +44,4 @@ mangekyo = "mangekyo.cli:main"
 include = ["mangekyo*"]
 
 [tool.setuptools.package-data]
-mangekyo = ["static/*"]
+mangekyo = ["static/*", "assets/*", "bootstrap/*.py"]

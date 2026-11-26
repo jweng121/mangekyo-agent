@@ -1,6 +1,8 @@
 """Exercise real-provider response parsing against a local test transport."""
 
+import io
 import json
+import hashlib
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -15,11 +17,13 @@ def test_live_config_loads_key_from_local_file_without_overriding_environment(tm
     path = tmp_path / ".env.local"
     path.write_text("ANTHROPIC_API_KEY=test-only-local\n"
                     "MANGEKYO_LANGGRAPH_MODEL=claude-haiku-5-5\n"
+                    "MANGEKYO_PROMPT_CACHE=1\n"
                     "UNRELATED_SETTING=ignored\n", encoding="utf-8")
     environment = {}
     _load_local_config(path, environment)
     assert environment["ANTHROPIC_API_KEY"] == "test-only-local"
     assert environment["MANGEKYO_LANGGRAPH_MODEL"] == "claude-haiku-5-5"
+    assert environment["MANGEKYO_PROMPT_CACHE"] == "1"
     assert "UNRELATED_SETTING" not in environment
     environment["ANTHROPIC_API_KEY"] = "existing-key"
     _load_local_config(path, environment)
@@ -56,6 +60,9 @@ def test_provider_usage_is_taken_from_response(monkeypatch):
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+    segments = usage.pop("request_segments")
+    assert segments["stable_prefix_sha256"] == hashlib.sha256(b"Synthetic invoice").hexdigest()
+    assert segments["cache_control_requested"] is False
     assert usage == {"provider": "openai", "model": "test-model", "node": "read_invoice",
                      "input_tokens": 1200, "output_tokens": 32,
                      "cached_input_tokens": 256, "cache_write_tokens": 0}
@@ -94,10 +101,59 @@ def test_anthropic_usage_normalizes_cache_read_and_write(monkeypatch):
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+    segments = usage.pop("request_segments")
+    assert segments["stable_prefix_sha256"] == hashlib.sha256(b"Synthetic invoice").hexdigest()
+    assert segments["cache_control_requested"] is False
     assert usage == {"provider": "anthropic", "model": "claude-haiku-5-5", "node": "read_invoice",
                      "input_tokens": 1200, "cached_input_tokens": 200,
                      "cache_write_tokens": 100, "output_tokens": 32}
     assert output == "WRONG-ACCOUNT"
+
+
+@pytest.mark.parametrize("missing_field", ["cache_read_input_tokens", "cache_creation_input_tokens"])
+def test_anthropic_missing_cache_usage_cannot_be_priced(monkeypatch, missing_field):
+    usage = {"input_tokens": 100, "cache_read_input_tokens": 0,
+             "cache_creation_input_tokens": 0, "output_tokens": 8}
+    del usage[missing_field]
+    response = {"usage": usage, "content": [{"type": "text", "text": "WRONG-ACCOUNT"}]}
+    monkeypatch.setenv("MANGEKYO_LANGGRAPH_MODEL", "claude-haiku-5-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
+    monkeypatch.setattr("mangekyo.examples.invoice.urllib.request.urlopen",
+                        lambda *_args, **_kwargs: io.BytesIO(json.dumps(response).encode()))
+    with pytest.raises(RuntimeError, match="complete, nonnegative token usage"):
+        model_call("read_invoice", "Synthetic invoice")
+
+
+def test_opt_in_cache_preserves_stable_prefix_and_hashes_changing_suffix(monkeypatch):
+    requests = []
+    response = {"usage": {"input_tokens": 100, "cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 0, "output_tokens": 8},
+                "content": [{"type": "text", "text": "PROPOSAL"}]}
+
+    def send(request, **_kwargs):
+        requests.append(json.loads(request.data))
+        return io.BytesIO(json.dumps(response).encode())
+
+    monkeypatch.setenv("MANGEKYO_LANGGRAPH_MODEL", "claude-haiku-5-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
+    monkeypatch.setenv("MANGEKYO_PROMPT_CACHE", "1")
+    monkeypatch.setattr("mangekyo.examples.invoice.urllib.request.urlopen", send)
+    prefix = "Stable instruction and history. " * 100
+    first, _ = model_call("propose_payment", prefix, "Account WRONG-ACCOUNT")
+    second, _ = model_call("propose_payment", prefix, "Account SAFE-ACCOUNT")
+    first_blocks = requests[0]["messages"][0]["content"]
+    second_blocks = requests[1]["messages"][0]["content"]
+    assert first_blocks[0] == second_blocks[0]
+    assert first_blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert first_blocks[1]["text"] != second_blocks[1]["text"]
+    assert first["request_segments"]["stable_prefix_sha256"] == second["request_segments"]["stable_prefix_sha256"]
+    assert first["request_segments"]["changing_suffix_sha256"] != second["request_segments"]["changing_suffix_sha256"]
+    assert first["request_segments"]["cache_control_requested"] is True
+    assert prefix not in json.dumps(first)
+    monkeypatch.setenv("MANGEKYO_REDACT", "SAFE-ACCOUNT")
+    with pytest.raises(ValueError, match="MANGEKYO_REDACT"):
+        model_call("propose_payment", prefix, "Account SAFE-ACCOUNT")
+    assert len(requests) == 2
 
 
 @pytest.fixture

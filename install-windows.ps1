@@ -1,11 +1,19 @@
 param(
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Mangekyo\bin')
+    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Mangekyo\bin'),
+    [switch]$NoPrompt,
+    [switch]$LaunchTui
 )
 
 $ErrorActionPreference = 'Stop'
 $source = Join-Path $PSScriptRoot 'dist\mangekyo.exe'
 if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
     throw "Mangekyo executable is missing: $source. Build it with python scripts/build_standalone.py first."
+}
+Write-Host 'Quick start: initializing local history...'
+$setupOutput = & $source setup
+$setupExit = $LASTEXITCODE
+if ($setupExit -ne 0) {
+    throw 'Mangekyo setup failed. Existing installation was left unchanged.'
 }
 
 $destinationDir = [System.IO.Path]::GetFullPath($InstallDir)
@@ -45,7 +53,20 @@ if (-not (($env:Path -split ';') | Where-Object {
 }
 
 Write-Host "Mangekyo installed: $destination"
+$setupOutput | Where-Object { $_ -notmatch '^Next:' } | ForEach-Object { Write-Host $_ }
 Write-Host "User PATH includes: $destinationDir"
 Write-Host 'For an already open PowerShell, run: $env:Path += ";$env:LOCALAPPDATA\Mangekyo\bin"'
 Write-Host 'Restart VS Code or Windows Terminal to load the permanent PATH change automatically.'
-Write-Host 'Then run: mangekyo setup'
+$startTui = [bool]$LaunchTui
+if (-not $startTui -and -not $NoPrompt -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    $answer = Read-Host 'Open the Mangekyo terminal inspector now? [y/N]'
+    $startTui = $answer -match '^(y|yes)$'
+}
+if ($startTui) {
+    & $destination --tui
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The Mangekyo terminal inspector exited with an error. Run mangekyo doctor for details.'
+    }
+} else {
+    Write-Host 'Next: mangekyo demo, then mangekyo --tui'
+}

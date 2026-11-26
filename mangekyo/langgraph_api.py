@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from .store import Store
+from .project import CONFIG
 
 ADAPTER = "langgraph"
 ADAPTER_VERSION = "1"
@@ -66,6 +67,46 @@ def _usage_events(store: Store, run_id: str) -> list[dict]:
             if e["kind"] == "model" and isinstance(e["payload"].get("usage"), dict)]
 
 
+def saved_benchmarks(store: Store, run_id: str) -> list[dict]:
+    """Read completed LangGraph comparisons without rerunning a graph or model."""
+    run = store.one("runs", run_id)
+    if run["adapter"] != ADAPTER:
+        raise ValueError("Run is not a LangGraph run")
+    root_id = run["parent_run"] or run_id
+    reports = []
+    for branch in store.branches():
+        if not branch["result_run"]:
+            continue
+        snap = store.one("snapshots", branch["source_snapshot"])
+        if snap["run_id"] != root_id:
+            continue
+        event = _event(store, branch["result_run"], "branch_benchmark")
+        if event:
+            reports.append(_with_cache_note(event["payload"]))
+    return reports
+
+
+def _with_cache_note(report: dict) -> dict:
+    """Explain the reported cache delta, including reports saved before this field existed."""
+    if "provider_cache_note" in report:
+        return report
+    cold = report.get("cold", {}).get("provider_usage", {})
+    branch = report.get("branch", {}).get("provider_usage", {})
+    cold_read = cold.get("cached_input_tokens")
+    branch_read = branch.get("cached_input_tokens")
+    if cold_read == branch_read == 0:
+        note = ("Both corrected paths reported 0 provider cache-read tokens, so no "
+                "prompt-cache discount was observed. Model cost differences came from "
+                "different work and token usage, not provider prompt caching.")
+    elif isinstance(cold_read, int) and isinstance(branch_read, int):
+        note = (f"Provider cache-read tokens: cold {cold_read}, branch {branch_read}. "
+                "The cache saving compares their input-token discounts at the configured rates; "
+                "cache writes are priced separately in model cost.")
+    else:
+        note = "Provider cache-read usage was not reported for both paths; no cache saving is verified."
+    return {**report, "provider_cache_note": note}
+
+
 def _cost_of_usage(items: list[dict], rates: dict[str, float]) -> tuple[dict, float, float]:
     if not items:
         raise ApiError(409, "Provider usage is missing; cost saving cannot be verified")
@@ -92,9 +133,13 @@ def _cost_of_usage(items: list[dict], rates: dict[str, float]) -> tuple[dict, fl
 
 
 class LangGraphApi:
-    def __init__(self, store_path: Path):
+    def __init__(self, store_path: Path, *, project_config: Path | None = None):
         self.store_path = Path(store_path)
-        raw = os.environ.get("MANGEKYO_LANGGRAPH_GRAPHS", "{}")
+        project_config = Path(project_config or os.environ.get("MANGEKYO_PROJECT_CONFIG", Path.cwd() / CONFIG))
+        configured = {}
+        if project_config.is_file():
+            configured = json.loads(project_config.read_text(encoding="utf-8")).get("langgraph_graphs", {})
+        raw = os.environ.get("MANGEKYO_LANGGRAPH_GRAPHS", json.dumps(configured))
         try:
             self.graphs = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -108,19 +153,7 @@ class LangGraphApi:
 
     def benchmarks_for_run(self, store: Store, run_id: str) -> list[dict]:
         """Return saved branch comparisons for the dashboard's run inspector."""
-        run = store.one("runs", run_id)
-        root_id = run["parent_run"] or run_id
-        reports = []
-        for branch in store.branches():
-            if not branch["result_run"]:
-                continue
-            snap = store.one("snapshots", branch["source_snapshot"])
-            if snap["run_id"] != root_id:
-                continue
-            event = _event(store, branch["result_run"], "branch_benchmark")
-            if event:
-                reports.append(event["payload"])
-        return reports
+        return saved_benchmarks(store, run_id)
 
     def _factory(self, alias: str):
         spec = self.graphs.get(alias)
@@ -167,7 +200,7 @@ class LangGraphApi:
                 saved = _event(store, branch["result_run"], "branch_benchmark")
                 if not saved:
                     raise ApiError(404, "Branch has no benchmark yet")
-                return 200, saved["payload"]
+                return 200, _with_cache_note(saved["payload"])
         raise ApiError(404, "Not found")
 
     def post(self, path: str, body: dict) -> tuple[int, dict]:
@@ -182,10 +215,25 @@ class LangGraphApi:
                                 "thread_id": _required_text(body, "thread_id"),
                                 "input": _dict(body.get("input"), "input"),
                                 "graph_version": getattr(factory, "graph_version", "unknown")}
-                run_id = store.create_run(alias, _required_text(body, "label"),
-                                          adapter=ADAPTER, adapter_version=ADAPTER_VERSION)
+                inherited = os.environ.get("MANGEKYO_RUN_ID")
+                if inherited:
+                    run = store.one("runs", inherited)
+                    if run["status"] != "running" or run["adapter"] != "process":
+                        raise ApiError(409, "Launcher run is not available for LangGraph registration")
+                    if _event(store, inherited, "registration"):
+                        raise ApiError(409, "Launcher run already has a LangGraph registration")
+                    with store.db:
+                        store.db.execute("UPDATE runs SET adapter=?, adapter_version=? WHERE id=?",
+                                         (ADAPTER, ADAPTER_VERSION, inherited))
+                    run_id = inherited
+                else:
+                    run_id = store.create_run(alias, _required_text(body, "label"),
+                                              adapter=ADAPTER, adapter_version=ADAPTER_VERSION)
                 store.event(run_id, "registration", registration)
-                return 201, {"run_id": run_id, "adapter": ADAPTER, "status": "running"}
+                return 201, {"run_id": run_id, "adapter": ADAPTER, "status": "running",
+                             "capabilities": {"trace": True, "checkpoint_inspection": True,
+                                              "live_resume": bool(getattr(factory, "resume_safe", False)
+                                                                  and callable(getattr(factory, "validate_checkpoint", None)))}}
             if len(parts) == 6 and parts[:4] == ["api", "v1", "langgraph", "runs"]:
                 run_id, action = parts[4:]
                 registration = _registration(store, run_id)
@@ -262,6 +310,7 @@ class LangGraphApi:
                  *, source_run: str | None = None, fork: dict | None = None,
                  correction: dict | None = None) -> dict:
         from langgraph.checkpoint.sqlite import SqliteSaver
+        from .langgraph_tools import MangekyoToolHandler
 
         db_run = source_run or run_id
         path = self._checkpointer_path(db_run)
@@ -285,6 +334,7 @@ class LangGraphApi:
                 else:
                     config = live_config
                     invocation = input_state
+                config = {**config, "callbacks": [MangekyoToolHandler(store.path, run_id)]}
                 for update in graph.stream(invocation, config, stream_mode="updates"):
                     for node, delta in update.items():
                         if not isinstance(delta, dict):
@@ -292,6 +342,16 @@ class LangGraphApi:
                         store.event(run_id, "node", {"node": node})
                         for usage in delta.get("usage_items", []):
                             store.event(run_id, "model", {"node": node, "usage": usage})
+                        for item in delta.get("tool_items", []):
+                            if not isinstance(item, dict):
+                                raise ApiError(409, "Graph tool_items must contain objects")
+                            store.event(run_id, "tool", {"node": node, "payload": item})
+                            if "action_key" in item or "action_state" in item:
+                                key = _required_text(item, "action_key")
+                                state = _required_text(item, "action_state")
+                                if state not in {"intent", "completed", "failed"}:
+                                    raise ApiError(409, "Graph reported invalid action_state")
+                                store.action(run_id, key, state, item.get("result"))
                         snapshot_state = graph.get_state(live_config)
                         locator = snapshot_state.config["configurable"]
                         context = {"graph_checkpoint": {
@@ -324,6 +384,8 @@ class LangGraphApi:
             raise ApiError(409, "Branch has already been resumed")
         snap = store.one("snapshots", branch["source_snapshot"])
         parent_id = snap["run_id"]
+        if store.one("runs", parent_id)["status"] == "running":
+            raise ApiError(409, "Original run is still active; stop it and reconcile actions before resuming")
         registration = _registration(store, parent_id)
         factory = self._factory(registration["graph"])
         if not getattr(factory, "resume_safe", False):
@@ -333,8 +395,15 @@ class LangGraphApi:
         context = store.context(snap["id"])
         if snap["adapter"] != ADAPTER or not context.get("last_node"):
             raise ApiError(409, "Checkpoint cannot resume this LangGraph adapter")
+        validator = getattr(factory, "validate_checkpoint", None)
+        if not callable(validator):
+            raise ApiError(409, "Graph has no checkpoint environment validator; reconcile before resuming")
+        try:
+            validator(context)
+        except (OSError, ValueError) as exc:
+            raise ApiError(409, f"Checkpoint environment is incompatible: {exc}") from exc
         unresolved = store.db.execute(
-            "SELECT action_key FROM actions WHERE run_id=? AND state='intent'", (parent_id,)
+            "SELECT action_key FROM actions WHERE run_id=? AND state IN ('intent','failed')", (parent_id,)
         ).fetchone()
         if unresolved:
             raise ApiError(409, f"Original run has unresolved action {unresolved[0]}")
@@ -344,6 +413,12 @@ class LangGraphApi:
         ).fetchone()
         if completed_after:
             raise ApiError(409, f"Original run completed action {completed_after[0]} after this checkpoint; reconcile before resuming")
+        for event in store.events(parent_id):
+            if event["created"] <= snap["created"] or event["kind"] != "tool":
+                continue
+            payload = event["payload"].get("payload")
+            if isinstance(payload, dict) and payload.get("action_state") == "completed":
+                raise ApiError(409, f"Original run completed action {payload.get('action_key')} after this checkpoint; reconcile before resuming")
         correction = store.get(branch["correction_hash"])
         from langgraph.checkpoint.sqlite import SqliteSaver
         with SqliteSaver.from_conn_string(str(self._checkpointer_path(parent_id))) as saver:
@@ -354,17 +429,12 @@ class LangGraphApi:
             saved = graph.get_state(source_config)
             if saved.config["configurable"].get("checkpoint_id") != context["graph_checkpoint"]["checkpoint_id"]:
                 raise ApiError(409, "LangGraph checkpoint is unavailable; no child run created")
-        child_id = store.create_run(registration["graph"], "Recovery: " + branch_id,
-                                    parent_run=parent_id, adapter=ADAPTER,
-                                    adapter_version=ADAPTER_VERSION)
-        claimed = store.db.execute(
-            "UPDATE branches SET result_run=? WHERE name=? AND result_run IS NULL",
-            (child_id, branch_id),
-        )
-        store.db.commit()
-        if claimed.rowcount != 1:
-            store.status(child_id, "cancelled")
-            raise ApiError(409, "Branch was resumed concurrently")
+        try:
+            child_id = store.claim_branch(branch_id, registration["graph"],
+                                          "Recovery: " + branch_id, parent_run=parent_id,
+                                          adapter=ADAPTER, adapter_version=ADAPTER_VERSION)
+        except ValueError as exc:
+            raise ApiError(409, str(exc)) from exc
         store.event(child_id, "registration", registration)
         store.event(child_id, "restore", {"source_snapshot": snap["id"],
                                           "skipped_steps": context["completed_steps"]})
@@ -383,7 +453,7 @@ class LangGraphApi:
         if prior:
             if prior["payload"]["configured_price_per_million_usd"] != body.get("price_per_million_usd"):
                 raise ApiError(409, "Benchmark already exists with different price rates")
-            return prior["payload"]
+            return _with_cache_note(prior["payload"])
         supplied = _dict(body.get("price_per_million_usd"), "price_per_million_usd")
         rates = {}
         for key in ("input", "cached_input", "cache_write", "output"):
@@ -400,6 +470,12 @@ class LangGraphApi:
             raise ApiError(409, "Graph has not declared a contained cold benchmark safe")
         if getattr(factory, "graph_version", "unknown") != registration["graph_version"]:
             raise ApiError(409, "Graph version changed since the source run")
+        validator = getattr(factory, "validate_checkpoint", None)
+        if validator is not None:
+            try:
+                validator(context)
+            except (OSError, ValueError) as exc:
+                raise ApiError(409, f"Checkpoint environment is incompatible: {exc}") from exc
         flag = _event(store, parent_id, "review_flag")
         if not flag or not flag["payload"].get("expected"):
             raise ApiError(409, "Flag the source run with an expected outcome before benchmarking")
@@ -421,6 +497,9 @@ class LangGraphApi:
             raise ApiError(409, "Cold and branch runs used different providers or models")
         child_output = _output(store, child_id)
         cold_output = _output(store, cold_id)
+        tool_counts = {key: sum(event["kind"] == "tool" for event in store.events(ident))
+                       for key, ident in (("source", parent_id), ("cold", cold_id),
+                                          ("branch", child_id))}
         skipped = (_event(store, child_id, "restore") or {"payload": {"skipped_steps": []}})["payload"]["skipped_steps"]
         skipped_items = [item for item in cold_items if item.get("node") in skipped]
         skipped_cost = _cost_of_usage(skipped_items, rates)[1] if skipped_items else 0.0
@@ -441,20 +520,24 @@ class LangGraphApi:
                   "graph_checkpoint": context["graph_checkpoint"],
                   "configured_price_per_million_usd": rates,
                   "source": {"run_id": parent_id, "provider_usage": source_usage,
-                             "model_cost_usd": source_cost},
+                             "model_cost_usd": source_cost,
+                             "tool_calls": tool_counts["source"]},
                   "cold": {"run_id": cold_id, "output": cold_output["output"],
                            "elapsed_ms": cold_output["elapsed_ms"],
                            "checkpoint_overhead_ms": cold_output["checkpoint_overhead_ms"],
-                           "provider_usage": cold_usage, "model_cost_usd": cold_cost},
+                           "provider_usage": cold_usage, "model_cost_usd": cold_cost,
+                           "tool_calls": tool_counts["cold"]},
                   "branch": {"run_id": child_id, "output": child_output["output"],
                              "elapsed_ms": child_output["elapsed_ms"],
                              "checkpoint_overhead_ms": child_output["checkpoint_overhead_ms"],
-                             "provider_usage": child_usage, "model_cost_usd": child_cost},
+                             "provider_usage": child_usage, "model_cost_usd": child_cost,
+                             "tool_calls": tool_counts["branch"]},
                   "net_model_saving_usd": saving,
                   "cold_total_model_cost_usd": source_cost + cold_cost,
                   "branch_total_model_cost_usd": source_cost + child_cost,
                   "wall_time_saved_ms": cold_output["elapsed_ms"] - child_output["elapsed_ms"],
                   "skipped_steps": skipped,
+                  "tool_calls_avoided": max(0, tool_counts["cold"] - tool_counts["branch"]),
                   "skipped_step_saving_usd": skipped_cost,
                   "provider_cache_saving_usd": child_discount - cold_discount,
                   "duplicate_side_effects": duplicates,
@@ -463,5 +546,6 @@ class LangGraphApi:
                   "saving_demonstrated": demonstrated,
                   "verdict": "saving demonstrated" if demonstrated else "no saving demonstrated",
                   "note": "Incremental corrected-rerun model cost only; the original failed run is common to both paths. Rates are operator supplied, not verified billing."}
+        report = _with_cache_note(report)
         store.event(child_id, "branch_benchmark", report)
         return report

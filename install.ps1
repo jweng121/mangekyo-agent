@@ -1,13 +1,40 @@
 param(
-    [string]$ReleaseBaseUrl = 'https://github.com/jweng121/mangekyo-agent/releases/latest/download',
+    [string]$ReleaseBaseUrl = '',
+    [string]$ReleaseApiUrl = 'https://api.github.com/repos/jweng121/mangekyo-agent/releases?per_page=100',
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Mangekyo\bin'),
-    [switch]$SkipPath
+    [switch]$SkipPath,
+    [switch]$NoPrompt,
+    [switch]$LaunchTui
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $assetName = 'mangekyo-windows-x64.exe'
-$releaseBase = $ReleaseBaseUrl.TrimEnd('/')
+if ($ReleaseBaseUrl) {
+    $releaseBase = $ReleaseBaseUrl.TrimEnd('/')
+    $checksumUrl = "$releaseBase/SHA256SUMS.txt"
+    $downloadUrl = "$releaseBase/$assetName"
+} else {
+    $releases = Invoke-RestMethod -Uri $ReleaseApiUrl -Headers @{
+        Accept = 'application/vnd.github+json'
+        'User-Agent' = 'MangekyoInstaller'
+    }
+    $eligible = foreach ($release in $releases) {
+        if ($release.draft -or -not $release.published_at) { continue }
+        $checksumAsset = @($release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' })
+        $binaryAsset = @($release.assets | Where-Object { $_.name -eq $assetName })
+        if ($checksumAsset.Count -eq 1 -and $binaryAsset.Count -eq 1) {
+            $release
+        }
+    }
+    $selected = $eligible | Sort-Object { [DateTimeOffset]::Parse($_.published_at) } -Descending | Select-Object -First 1
+    if (-not $selected) {
+        throw 'No published Mangekyo release has both the Windows executable and SHA256SUMS.txt.'
+    }
+    $checksumUrl = ($selected.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' }).browser_download_url
+    $downloadUrl = ($selected.assets | Where-Object { $_.name -eq $assetName }).browser_download_url
+    Write-Host "Selected Mangekyo release $($selected.tag_name)"
+}
 $destinationDir = [System.IO.Path]::GetFullPath($InstallDir)
 $destination = Join-Path $destinationDir 'mangekyo.exe'
 $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
@@ -20,9 +47,9 @@ New-Item -ItemType Directory -Path $work -Force | Out-Null
 try {
     $checksumFile = Join-Path $work 'SHA256SUMS.txt'
     $downloadFile = Join-Path $work $assetName
-    Write-Host "Downloading Mangekyo from $releaseBase"
-    Invoke-WebRequest -UseBasicParsing -Uri "$releaseBase/SHA256SUMS.txt" -OutFile $checksumFile
-    Invoke-WebRequest -UseBasicParsing -Uri "$releaseBase/$assetName" -OutFile $downloadFile
+    Write-Host "Downloading Mangekyo from $downloadUrl"
+    Invoke-WebRequest -UseBasicParsing -Uri $checksumUrl -OutFile $checksumFile
+    Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -OutFile $downloadFile
 
     $checksumLines = @(Get-Content -LiteralPath $checksumFile | Where-Object {
         $_ -match ('^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($assetName) + '$')
@@ -34,6 +61,13 @@ try {
     $actual = (Get-FileHash -LiteralPath $downloadFile -Algorithm SHA256).Hash
     if (-not $actual.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Downloaded Mangekyo failed its SHA256 check. Installation stopped."
+    }
+
+    Write-Host 'Quick start: initializing local history...'
+    $setupOutput = & $downloadFile setup
+    $setupExit = $LASTEXITCODE
+    if ($setupExit -ne 0) {
+        throw 'Mangekyo setup failed. Existing installation was left unchanged.'
     }
 
     New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
@@ -78,11 +112,25 @@ try {
     }
 
     Write-Host "Mangekyo installed: $destination"
+    $setupOutput | Where-Object { $_ -notmatch '^Next:' } | ForEach-Object { Write-Host $_ }
     if ($SkipPath) {
         Write-Host 'PATH was left unchanged for this test installation.'
     } else {
-        Write-Host 'Run: mangekyo setup'
         Write-Host 'If this ran in a child PowerShell process, open a new terminal first.'
+    }
+
+    $startTui = [bool]$LaunchTui
+    if (-not $startTui -and -not $NoPrompt -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+        $answer = Read-Host 'Open the Mangekyo terminal inspector now? [y/N]'
+        $startTui = $answer -match '^(y|yes)$'
+    }
+    if ($startTui) {
+        & $destination --tui
+        if ($LASTEXITCODE -ne 0) {
+            throw 'The Mangekyo terminal inspector exited with an error. Run mangekyo doctor for details.'
+        }
+    } else {
+        Write-Host 'Next: mangekyo demo, then mangekyo --tui'
     }
 } finally {
     if (Test-Path -LiteralPath $work) {

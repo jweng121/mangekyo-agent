@@ -5,10 +5,14 @@ from __future__ import annotations
 import subprocess
 import sys
 import tempfile
+import json
+from importlib.metadata import distribution, version
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 
-def connect_project(project: Path) -> str:
+def connect_project(project: Path, *, verbose: bool = True) -> str:
     project = project.expanduser().resolve()
     if not project.is_dir():
         raise ValueError(f"Project directory does not exist: {project}")
@@ -20,6 +24,16 @@ def connect_project(project: Path) -> str:
     bundle = Path(getattr(sys, "_MEIPASS", "")) / "sdk"
     wheels = list(bundle.glob("mangekyo_agent-*.whl")) if bundle.is_dir() else []
     source = Path(__file__).parent.parent
+    installed_wheel = not wheels and not (source / "pyproject.toml").exists()
+    if installed_wheel:
+        current_version = version("mangekyo-agent")
+        check = subprocess.run([str(python), "-c",
+                                "from importlib.metadata import version; import mangekyo; "
+                                "print(version('mangekyo-agent')); print(mangekyo.__file__)"],
+                               cwd=project, text=True, capture_output=True, timeout=20)
+        lines = check.stdout.splitlines()
+        if check.returncode == 0 and len(lines) >= 2 and lines[0] == current_version:
+            return lines[1]
     if wheels:
         package = wheels[0]
         temp = None
@@ -33,8 +47,18 @@ def connect_project(project: Path) -> str:
             raise RuntimeError("SDK wheel build failed: " + (built.stderr or built.stdout)[-600:])
         package = next(Path(temp.name).glob("mangekyo_agent-*.whl"))
     else:
-        raise RuntimeError("Bundled Mangekyo SDK is missing; use a complete standalone build")
-    print(f"Installing Mangekyo SDK into {python} from {package}")
+        direct_url = distribution("mangekyo-agent").read_text("direct_url.json")
+        local_wheel = None
+        if direct_url:
+            location = urlparse(json.loads(direct_url).get("url", ""))
+            if location.scheme == "file":
+                candidate = Path(url2pathname(location.path))
+                if candidate.is_file() and candidate.suffix == ".whl":
+                    local_wheel = candidate
+        package = local_wheel or f"mangekyo-agent=={current_version}"
+        temp = None
+    if verbose:
+        print(f"Installing Mangekyo SDK into {python} from {package}")
     try:
         completed = subprocess.run([str(python), "-m", "pip", "install", "--no-cache-dir", "--no-deps", str(package)],
                                    cwd=project, text=True, capture_output=True, timeout=180)

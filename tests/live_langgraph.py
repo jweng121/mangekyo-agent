@@ -16,6 +16,7 @@ def _load_local_config(path: Path | None = None, environ: dict | None = None):
     if not path.exists():
         return
     allowed = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "MANGEKYO_LANGGRAPH_MODEL",
+               "MANGEKYO_PROMPT_CACHE",
                *(f"MANGEKYO_TEST_PRICE_{name}_USD_PER_M"
                  for name in ("INPUT", "CACHED_INPUT", "CACHE_WRITE", "OUTPUT"))}
     for line in path.read_text(encoding="utf-8-sig").splitlines():
@@ -43,7 +44,7 @@ def test_real_provider_branch_cost_and_correctness(configured_api):
     assert model, "Set MANGEKYO_LANGGRAPH_MODEL for the live test"
     provider = "anthropic" if model.startswith("claude-") else "openai"
     key_name = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY"
-    assert os.environ.get(key_name), f"Set {key_name} in .env.local for the live LangGraph test"
+    assert os.environ.get(key_name), f"Set {key_name} in the environment or .env.local for the live LangGraph test"
     price_names = ("INPUT", "CACHED_INPUT", "CACHE_WRITE", "OUTPUT")
     rates = {}
     for name in price_names:

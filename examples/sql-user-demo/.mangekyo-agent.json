@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "integration": "langgraph",
+  "instrumentation": {
+    "mode": "python-langchain-auto",
+    "captures": [
+      "LangChain model calls",
+      "LangChain tool calls",
+      "LangGraph invoke output"
+    ]
+  },
+  "capabilities": {
+    "trace": true,
+    "checkpoint_inspection": true,
+    "live_resume": true
+  },
+  "langgraph_graphs": {
+    "sql": "mangekyo.examples.sql_agent:build_graph"
+  },
+  "graph_capabilities": {
+    "sql": {
+      "live_resume": true
+    }
+  },
+  "current_model": {
+    "version": "v1",
+    "artifact": "active-sql-model.json"
+  },
+  "tui_launch": [
+    "{python}",
+    "../../scripts/sql_cli_agent.py"
+  ]
+}

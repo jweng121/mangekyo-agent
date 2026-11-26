@@ -20,6 +20,18 @@ class LaunchTest(unittest.TestCase):
             self.assertEqual(events[0]["payload"]["argv"][0], sys.executable)
             self.assertEqual(events[-1]["payload"]["exit_code"], 3)
 
+    def test_recorder_attaches_to_launcher_run(self):
+        script = ("from mangekyo import RunRecorder, Store; "
+                  "s=Store(); r=RunRecorder(s, 'agent', 'task'); "
+                  "r.record('tool', name='lookup', result='found'); r.finish(); s.close()")
+        with tempfile.TemporaryDirectory() as root, Store(root) as store:
+            self.assertEqual(launch(store, [sys.executable, "-c", script], "Linked task"), 0)
+            runs = store.runs()
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0]["status"], "completed")
+            self.assertEqual([event["kind"] for event in store.events(runs[0]["id"])],
+                             ["launch", "process", "tool", "exit"])
+
 
 if __name__ == "__main__":
     unittest.main()

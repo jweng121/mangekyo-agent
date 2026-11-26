@@ -42,9 +42,16 @@ def add_file(store: Store, run_id: str, path: Path, *, event_id: str | None = No
                           event_id=event_id, parsed_text=parsed_text, source=str(path))
 
 
-def capture_url(store: Store, run_id: str, url: str, *, event_id: str | None = None) -> str:
+def capture_url(store: Store, run_id: str, url: str, *, event_id: str | None = None,
+                selector: str | None = None,
+                mask_selectors: tuple[str, ...] = ()) -> str:
     if not url.startswith(("https://", "http://")):
         raise ValueError("Browser capture needs an http or https URL")
+    if os.environ.get("MANGEKYO_REDACT"):
+        raise ValueError("Browser capture is disabled while MANGEKYO_REDACT is set; literal redaction cannot remove screenshot pixels")
+    source_event = store.one("events", event_id) if event_id else None
+    if source_event and source_event["run_id"] != run_id:
+        raise ValueError("Artifact event belongs to another run")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -56,10 +63,48 @@ def capture_url(store: Store, run_id: str, url: str, *, event_id: str | None = N
             try:
                 page = browser.new_page(viewport={"width": 1280, "height": 800})
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                text = page.locator("body").inner_text(timeout=10000)
-                screenshot = page.screenshot(full_page=True, animations="disabled")
-                return store.artifact(run_id, "Browser capture.png", screenshot, "image/png",
-                                      event_id=event_id, parsed_text=text, source=page.url)
+                masks = []
+                for mask_selector in mask_selectors:
+                    if not isinstance(mask_selector, str) or not mask_selector.strip():
+                        raise ValueError("Visual mask selectors must be nonempty")
+                    locator = page.locator(mask_selector)
+                    if locator.count() == 0:
+                        raise ValueError(f"Visual mask selector matched no elements: {mask_selector}")
+                    masks.append(locator)
+                text = None if masks else page.locator("body").inner_text(timeout=10000)
+                target = None
+                if selector:
+                    element = page.locator(selector).first
+                    element.scroll_into_view_if_needed(timeout=10000)
+                    target = element.evaluate("el => { const r=el.getBoundingClientRect(); return {x:r.left+window.scrollX,y:r.top+window.scrollY,width:r.width,height:r.height,text:el.innerText || el.getAttribute('aria-label') || ''} }")
+                    if target["width"] <= 0 or target["height"] <= 0:
+                        raise ValueError("Selected browser target has no visible area")
+                    if masks:
+                        target["text"] = "[MASKED]"
+                screenshot = page.screenshot(full_page=True, animations="disabled",
+                                             mask=masks, mask_color="#000000")
+                observation = {"url": page.url, "selector": selector,
+                               "target": target, "action_result": "target located" if target else "page captured",
+                               "visual_masks": list(mask_selectors), "parsed_text_omitted": bool(masks)}
+                observed_event = store.event(run_id, "browser_observation", observation,
+                                             source_event["snapshot_id"] if source_event else None)
+                artifact_id = store.artifact(run_id, "Browser capture.png", screenshot, "image/png",
+                                             event_id=event_id or observed_event,
+                                             parsed_text=text, source=page.url)
+                if target:
+                    from PIL import Image
+                    with Image.open(io.BytesIO(screenshot)) as captured:
+                        width, height = captured.size
+                    x = max(0.0, target["x"] / width)
+                    y = max(0.0, target["y"] / height)
+                    right = min(1.0, (target["x"] + target["width"]) / width)
+                    bottom = min(1.0, (target["y"] + target["height"]) / height)
+                    if right <= x or bottom <= y:
+                        raise ValueError("Selected browser target is outside the screenshot")
+                    label = target["text"].strip()[:120] or selector
+                    store.annotate(artifact_id, 0, x, y, right - x, bottom - y,
+                                   f"Agent target: {label} ({selector})")
+                return artifact_id
             finally:
                 browser.close()
     except Exception as exc:

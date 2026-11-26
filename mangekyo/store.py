@@ -236,6 +236,8 @@ class Store:
         digest = self.put(payload)
         event_id = uuid.uuid4().hex[:12]
         with self.db:
+            if not self.db.in_transaction:
+                self.db.execute("BEGIN IMMEDIATE")
             seq = self.db.execute("SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE run_id=?", (run_id,)).fetchone()[0]
             self.db.execute("INSERT INTO events VALUES (?,?,?,?,?,?,?)",
                             (event_id, run_id, seq, self._redact(kind), time.time(), digest, snapshot_id))
@@ -288,27 +290,64 @@ class Store:
         with self.db:
             self.db.execute("INSERT INTO branches VALUES (?,?,?,?,NULL)", (name, snap_id, digest, time.time()))
 
+    def claim_branch(self, name: str, agent: str, label: str, *, parent_run: str,
+                     adapter: str, adapter_version: str) -> str:
+        """Create exactly one child run before any resumed action executes."""
+        child_id = uuid.uuid4().hex[:12]
+        with self.db:
+            claimed = self.db.execute(
+                "UPDATE branches SET result_run=? WHERE name=? AND result_run IS NULL",
+                (child_id, name))
+            if claimed.rowcount != 1:
+                raise ValueError("Branch was already claimed for resume; no action executed")
+            self.db.execute("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?)",
+                            (child_id, self._redact(agent), self._redact(label), "running",
+                             time.time(), parent_run, adapter, adapter_version))
+        return child_id
+
     def action(self, run_id: str, key: str, state: str, result: Any | None = None) -> None:
         digest = self.put(result) if result is not None else None
         with self.db:
             self.db.execute("INSERT INTO actions VALUES (?,?,?,?,?,?) ON CONFLICT(run_id, action_key) "
-                            "DO UPDATE SET state=excluded.state,result_hash=excluded.result_hash",
+                            "DO UPDATE SET state=excluded.state,result_hash=excluded.result_hash,"
+                            "created=excluded.created",
                             (uuid.uuid4().hex[:12], run_id, key, state, digest, time.time()))
 
     def stats(self) -> dict[str, Any]:
         objects = [p for p in self.objects.glob("*/*") if p.is_file() and re.fullmatch(r"[0-9a-f]{64}", p.name)]
+        context_refs: list[str] = []
+        for row in self.db.execute("SELECT manifest_hash FROM snapshots"):
+            context_refs.extend(self.get(row[0]).values())
+        context_sizes = {digest: (self.objects / digest[:2] / digest).stat().st_size
+                         for digest in set(context_refs)}
+        logical_context_bytes = sum(context_sizes[digest] for digest in context_refs)
+        physical_context_bytes = sum(context_sizes.values())
         return {"objects": len(objects), "object_bytes": sum(p.stat().st_size for p in objects),
                 "artifact_bytes": sum(p.stat().st_size for p in self.blobs.glob("*/*") if p.is_file()),
-                "runs": len(self.runs()), "branches": len(self.branches())}
+                "runs": len(self.runs()), "branches": len(self.branches()),
+                "context_object_references": len(context_refs),
+                "context_unique_objects": len(context_sizes),
+                "context_logical_bytes": logical_context_bytes,
+                "context_physical_bytes": physical_context_bytes,
+                "context_saved_bytes": logical_context_bytes - physical_context_bytes}
 
 
 class RunRecorder:
     """Small framework-neutral synchronous and asynchronous instrumentation surface."""
 
-    def __init__(self, store: Store, agent: str, label: str):
+    def __init__(self, store: Store, agent: str, label: str, *, run_id: str | None = None):
         self.store = store
-        self.run_id = store.create_run(agent, label)
-        self.last_snapshot: str | None = None
+        inherited = run_id or os.environ.get("MANGEKYO_RUN_ID")
+        if inherited:
+            existing = store.one("runs", inherited)
+            if existing["status"] != "running":
+                raise ValueError("Cannot attach to a run that is not running")
+            self.run_id = inherited
+            snapshots = store.snapshots(inherited)
+            self.last_snapshot = snapshots[-1]["id"] if snapshots else None
+        else:
+            self.run_id = store.create_run(agent, label)
+            self.last_snapshot = None
 
     def __enter__(self) -> "RunRecorder":
         return self
@@ -336,9 +375,11 @@ class RunRecorder:
         self.last_snapshot = self.store.snapshot(self.run_id, name, context, parent_id=self.last_snapshot)
         return self.last_snapshot
 
-    def artifact(self, path: str | Path, *, parsed_text: str | None = None) -> str:
+    def artifact(self, path: str | Path, *, event_id: str | None = None,
+                 parsed_text: str | None = None) -> str:
         from .evidence import add_file
-        return add_file(self.store, self.run_id, Path(path), parsed_text=parsed_text)
+        return add_file(self.store, self.run_id, Path(path), event_id=event_id,
+                        parsed_text=parsed_text)
 
     async def acheckpoint(self, name: str, **context: Any) -> str:
         return self.checkpoint(name, **context)

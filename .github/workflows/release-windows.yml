@@ -1,4 +1,4 @@
-name: Release Windows executable
+name: Release standalone executables
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,11 +17,39 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install build dependencies
-        run: python -m pip install ".[tui,evidence]" pyinstaller
-      - name: Run tests
-        run: python -m unittest discover -s tests -v
+        run: python -m pip install -e ".[tui,evidence,langgraph]" pyinstaller pytest packaging "pywinpty>=3,<4"
+      - name: Confirm release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/check_release_version.py "$env:RELEASE_TAG"
+      - name: Run deterministic tests
+        run: python -m pytest tests -q
+      - name: Smoke test interactive terminal recovery
+        run: python scripts/smoke_tui.py
+      - name: Smoke test installed wheel
+        run: python scripts/smoke_wheel.py
+      - name: Install browser for dashboard smoke check
+        run: python -m playwright install chromium
+      - name: Check captured browser target
+        run: python -m pytest tests/browser_target.py -q
+      - name: Smoke test demo dashboard
+        run: python scripts/smoke_dashboard.py
       - name: Build standalone executable
         run: python scripts/build_standalone.py
+      - name: Sign and verify Windows executable
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: .\scripts\sign_windows_release.ps1 -Executable dist\mangekyo.exe
+      - name: Smoke test packaged recovery flow
+        run: python scripts/smoke_release.py dist/mangekyo.exe
+      - name: Smoke test packaged terminal recovery
+        run: python scripts/smoke_packaged_tui_windows.py dist/mangekyo.exe
+      - name: Smoke test packaged dashboard in browser
+        run: python scripts/smoke_dashboard.py --executable dist/mangekyo.exe
+      - name: Smoke test bundled SDK project setup
+        run: python scripts/smoke_project_setup.py dist/mangekyo.exe
       - name: Prepare release files
         shell: pwsh
         run: |
@@ -29,8 +57,178 @@ jobs:
           Copy-Item dist/mangekyo.exe release/mangekyo-windows-x64.exe
           $hash = (Get-FileHash release/mangekyo-windows-x64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  mangekyo-windows-x64.exe" | Set-Content release/SHA256SUMS.txt -Encoding ascii
+      - name: Smoke test installer from local release feed
+        run: python scripts/smoke_installer.py --release-dir release
+      - name: Stage verified Windows files
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            release/mangekyo-windows-x64.exe
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: python -m pip install -e '.[tui,evidence,langgraph]' pyinstaller pytest packaging
+      - name: Confirm release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/check_release_version.py "$RELEASE_TAG"
+      - name: Run deterministic tests
+        run: python -m pytest tests -q
+      - name: Smoke test interactive terminal recovery
+        run: python scripts/smoke_tui.py
+      - name: Smoke test installed wheel
+        run: python scripts/smoke_wheel.py
+      - name: Check Linux installer syntax
+        run: bash -n install-linux.sh
+      - name: Install Chromium and Linux browser dependencies
+        run: python -m playwright install --with-deps chromium
+      - name: Build standalone executable
+        run: python scripts/build_standalone.py
+      - name: Smoke test packaged recovery flow
+        run: python scripts/smoke_release.py dist/linux/mangekyo
+      - name: Smoke test packaged terminal UI
+        run: python scripts/smoke_packaged_tui_posix.py dist/linux/mangekyo
+      - name: Smoke test packaged dashboard in browser
+        run: python scripts/smoke_dashboard.py --executable dist/linux/mangekyo
+      - name: Smoke test bundled SDK project setup
+        run: python scripts/smoke_project_setup.py dist/linux/mangekyo
+      - name: Prepare Linux release files
+        run: |
+          mkdir -p release
+          cp dist/linux/mangekyo release/mangekyo-linux-x64
+          cp install-linux.sh release/install-linux.sh
+          sha256sum release/mangekyo-linux-x64 | sed 's|release/||' > release/SHA256SUMS-linux.txt
+      - name: Smoke test Linux installer with staged asset
+        run: python scripts/smoke_linux_installer.py release/mangekyo-linux-x64
+      - name: Stage verified Linux files
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: |
+            release/mangekyo-linux-x64
+            release/SHA256SUMS-linux.txt
+            release/install-linux.sh
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: python -m pip install -e '.[tui,evidence,langgraph]' pyinstaller pytest packaging
+      - name: Confirm release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/check_release_version.py "$RELEASE_TAG"
+      - name: Run deterministic tests
+        run: python -m pytest tests -q
+      - name: Smoke test interactive terminal recovery
+        run: python scripts/smoke_tui.py
+      - name: Smoke test installed wheel
+        run: python scripts/smoke_wheel.py
+      - name: Check macOS installer syntax
+        run: bash -n install-macos.sh
+      - name: Install Chromium for macOS dashboard check
+        run: python -m playwright install chromium
+      - name: Build standalone executable
+        run: python scripts/build_standalone.py
+      - name: Smoke test packaged recovery flow
+        run: python scripts/smoke_release.py dist/darwin/mangekyo
+      - name: Smoke test packaged terminal UI
+        run: python scripts/smoke_packaged_tui_posix.py dist/darwin/mangekyo
+      - name: Smoke test packaged dashboard in browser
+        run: python scripts/smoke_dashboard.py --executable dist/darwin/mangekyo
+      - name: Smoke test bundled SDK project setup
+        run: python scripts/smoke_project_setup.py dist/darwin/mangekyo
+      - name: Smoke test macOS installer
+        run: python scripts/smoke_macos_installer.py dist/darwin/mangekyo
+
+  pypi-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install packaging tools
+        run: python -m pip install build twine packaging
+      - name: Confirm release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/check_release_version.py "$RELEASE_TAG"
+      - name: Build wheel and source archive
+        run: python -m build --outdir pypi-dist
+      - name: Check distribution metadata
+        run: python -m twine check pypi-dist/*
+      - name: Smoke test published wheel contents
+        run: python scripts/smoke_wheel.py --wheel pypi-dist/mangekyo_agent-*.whl
+      - name: Rebuild wheel from source archive
+        run: python -m pip wheel --no-deps --wheel-dir pypi-from-sdist pypi-dist/mangekyo_agent-*.tar.gz
+      - name: Smoke test source archive contents
+        run: python scripts/smoke_wheel.py --wheel pypi-from-sdist/mangekyo_agent-*.whl
+      - name: Stage checked Python distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-distributions
+          path: pypi-dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, linux, macos, pypi-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-release
+          path: release
       - name: Publish GitHub Release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" release/mangekyo-windows-x64.exe release/SHA256SUMS.txt --verify-tag --title "Mangekyo ${{ github.ref_name }}" --generate-notes
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          release_flags=()
+          if [[ "$RELEASE_TAG" =~ (alpha|beta|rc|a[0-9]|b[0-9]) ]]; then
+            release_flags=(--prerelease --latest=false)
+          fi
+          notes_flags=(--generate-notes)
+          if [[ "$RELEASE_TAG" == "v0.2.0-beta.1" ]]; then
+            notes_flags=(--notes-file docs/release-notes-v0.2.0-beta.1.md)
+          fi
+          gh release create "$RELEASE_TAG" \
+            release/mangekyo-windows-x64.exe release/SHA256SUMS.txt \
+            release/mangekyo-linux-x64 release/SHA256SUMS-linux.txt \
+            release/install-linux.sh \
+            --verify-tag "${release_flags[@]}" --title "Mangekyo $RELEASE_TAG" "${notes_flags[@]}"
+
+  pypi-publish:
+    needs: [publish, pypi-build]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-distributions
+          path: dist
+      - name: Publish Python distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

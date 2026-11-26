@@ -49,8 +49,11 @@ def langgraph_api(tmp_path: Path):
     home = tmp_path / "history"
     log_path = tmp_path / "dashboard.log"
     env = os.environ.copy()
+    env["MANGEKYO_FILE_INVOICE_ROOT"] = str(tmp_path)
+    env["MANGEKYO_TOOL_CACHE_HOME"] = str(tmp_path / "tool-cache")
     env["MANGEKYO_LANGGRAPH_GRAPHS"] = json.dumps(
         {"invoice": "mangekyo.examples.invoice:build_graph",
+         "file_invoice": "mangekyo.examples.file_invoice:build_graph",
          "unapproved": "mangekyo.examples.invoice:unapproved_graph",
          "resume_only": "mangekyo.examples.invoice:resume_only_graph"}
     )
